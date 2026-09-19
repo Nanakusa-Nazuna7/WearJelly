@@ -482,12 +482,16 @@ class AppViewModel(
 
     private fun userMessage(error: Exception): String = when (error) {
         is JellyfinException -> when (error.statusCode) {
-            401 -> "登录已失效或用户名、密码不正确，请重新登录。"
-            403 -> "当前账户没有访问权限，请检查服务器设置。"
-            else -> error.message?.takeIf { it.isNotBlank() } ?: "服务器请求失败，请重试。"
+            401 -> "用户名或密码错误 (HTTP 401)"
+            403 -> "无权访问此曲库 (HTTP 403)"
+            404 -> "服务器端点不存在 (HTTP 404)"
+            else -> error.message?.takeIf { it.isNotBlank() } ?: "服务器错误 (HTTP ${error.statusCode ?: "未知"})"
         }
-        is IOException -> "连接失败，请检查手表网络、服务器地址和证书后重试。"
-        else -> "操作未完成，请稍后重试。"
+        is java.net.UnknownHostException -> "无法解析域名/主机: ${error.message ?: "找不到服务器"}"
+        is java.net.SocketTimeoutException -> "连接服务器超时，请检查手表WiFi或IP"
+        is java.net.ConnectException -> "无法连接到该端口: ${error.message ?: "连接被拒绝"}"
+        is IOException -> "网络连接异常: ${error.localizedMessage ?: error.javaClass.simpleName}"
+        else -> "错误: ${error.localizedMessage ?: error.javaClass.simpleName}"
     }
 
     private companion object { const val PAGE_SIZE = 60 }

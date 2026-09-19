@@ -16,15 +16,17 @@ import okhttp3.RequestBody.Companion.toRequestBody
 class JellyfinException(message: String, val statusCode: Int? = null) : IOException(message)
 
 fun normalizeServerUrl(rawUrl: String): String {
-    var trimmed = rawUrl.trim()
+    var trimmed = rawUrl.trim().replace("\\s+".toRegex(), "")
     if (!trimmed.startsWith("http://", ignoreCase = true) && !trimmed.startsWith("https://", ignoreCase = true)) {
         trimmed = "http://$trimmed"
     }
     while (trimmed.endsWith("/")) {
         trimmed = trimmed.substring(0, trimmed.length - 1)
     }
-    val parsed = trimmed.toHttpUrlOrNull() ?: throw JellyfinException("无效的服务器地址格式")
-    return "${parsed.scheme}://${parsed.host}${if (parsed.port != 80 && parsed.port != 443) ":${parsed.port}" else ""}${parsed.encodedPath.trimEnd('/')}"
+    val parsed = trimmed.toHttpUrlOrNull() ?: throw JellyfinException("无效的服务器地址: $rawUrl")
+    val portPart = if (parsed.port != 80 && parsed.port != 443) ":${parsed.port}" else ""
+    val pathPart = parsed.encodedPath.trimEnd('/')
+    return "${parsed.scheme}://${parsed.host}$portPart$pathPart"
 }
 
 class JellyfinRepository(

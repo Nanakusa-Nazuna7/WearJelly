@@ -196,10 +196,6 @@ internal fun LoginScreen(viewModel: AppViewModel, loginUi: LoginUi) {
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = {
-                    focusManager.clearFocus()
-                    viewModel.login()
-                }),
                 colors = TextFieldDefaults.outlinedTextFieldColors(
                     textColor = Color.White,
                     focusedBorderColor = MaterialTheme.colors.primary,
