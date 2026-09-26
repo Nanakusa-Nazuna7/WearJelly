@@ -3,16 +3,34 @@ package dev.wearjelly.data
 import android.content.Context
 import java.io.File
 import java.io.FileOutputStream
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
+enum class DownloadStatus { WAITING, RUNNING, DONE, FAILED }
+
+data class QueueEntry(
+    val itemId: String,
+    val itemName: String,
+    val artistText: String,
+    val status: DownloadStatus,
+    val downloadedBytes: Long = 0L,
+    val totalBytes: Long = -1L,
+    val estimated: Boolean = false,
+    val qualityLabel: String = ""
+)
+
+/** 缓存队列：所有任务入队即可见（排队中/进度/完成/失败），串行 worker 依次下载 */
 class DownloadManager(
     private val context: Context,
     private val client: OkHttpClient,
@@ -22,11 +40,17 @@ class DownloadManager(
     private val _downloads = MutableStateFlow<List<DownloadedSong>>(emptyList())
     val downloads: StateFlow<List<DownloadedSong>> = _downloads.asStateFlow()
 
+    private val _queue = MutableStateFlow<List<QueueEntry>>(emptyList())
+    val queue: StateFlow<List<QueueEntry>> = _queue.asStateFlow()
+
     private val _downloadingIds = MutableStateFlow<Set<String>>(emptySet())
     val downloadingIds: StateFlow<Set<String>> = _downloadingIds.asStateFlow()
 
     private val _progress = MutableStateFlow<Map<String, DownloadProgress>>(emptyMap())
     val progress: StateFlow<Map<String, DownloadProgress>> = _progress.asStateFlow()
+
+    private val workerActive = AtomicBoolean(false)
+    private val workerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val downloadsDir: File
         get() = File(context.filesDir, "audio_downloads").apply { if (!exists()) mkdirs() }
@@ -44,11 +68,8 @@ class DownloadManager(
             return
         }
         try {
-            val content = indexFile.readText()
-            val list = json.decodeFromString<List<DownloadedSong>>(content)
-            // 过滤掉实际文件已被删除的记录
-            val valid = list.filter { File(it.localFilePath).exists() }
-            _downloads.value = valid
+            val list = json.decodeFromString<List<DownloadedSong>>(indexFile.readText())
+            _downloads.value = list.filter { File(it.localFilePath).exists() }
         } catch (e: Exception) {
             e.printStackTrace()
             _downloads.value = emptyList()
@@ -57,8 +78,7 @@ class DownloadManager(
 
     private fun saveIndex(list: List<DownloadedSong>) {
         try {
-            val content = json.encodeToString(list)
-            indexFile.writeText(content)
+            indexFile.writeText(json.encodeToString(list))
             _downloads.value = list
         } catch (e: Exception) {
             e.printStackTrace()
@@ -79,15 +99,57 @@ class DownloadManager(
             ?.takeIf { File(it).exists() }
     }
 
-    suspend fun downloadSong(item: JellyfinItem): Boolean = withContext(Dispatchers.IO) {
-        if (isDownloaded(item.id) || _downloadingIds.value.contains(item.id)) {
-            return@withContext true
+    fun enqueue(items: List<JellyfinItem>) {
+        val additions = items
+            .filter { !isDownloaded(it.id) }
+            .filter { candidate -> _queue.value.none { e -> e.itemId == candidate.id && e.status != DownloadStatus.FAILED } }
+        if (additions.isEmpty()) return
+        val label = repository.bitrate.value.displayName
+        val newEntries = additions.map {
+            QueueEntry(
+                itemId = it.id,
+                itemName = it.name,
+                artistText = it.artistText,
+                status = DownloadStatus.WAITING,
+                qualityLabel = label
+            )
         }
+        _queue.value = newEntries + _queue.value
+        startWorker()
+    }
 
+    private fun updateEntry(itemId: String, change: (QueueEntry) -> QueueEntry) {
+        _queue.value = _queue.value.map { if (it.itemId == itemId) change(it) else it }
+    }
+
+    private fun startWorker() {
+        if (workerActive.compareAndSet(false, true)) {
+            workerScope.launch {
+                try {
+                    while (true) {
+                        val next = _queue.value.firstOrNull { it.status == DownloadStatus.WAITING } ?: break
+                        updateEntry(next.itemId) { it.copy(status = DownloadStatus.RUNNING) }
+                        _downloadingIds.value = _downloadingIds.value + next.itemId
+                        val ok = downloadNow(next.itemId, next.itemName, next.artistText)
+                        _downloadingIds.value = _downloadingIds.value - next.itemId
+                        updateEntry(next.itemId) {
+                            it.copy(status = if (ok) DownloadStatus.DONE else DownloadStatus.FAILED)
+                        }
+                        if (ok) _progress.value = _progress.value - next.itemId
+                    }
+                } finally {
+                    workerActive.set(false)
+                    if (_queue.value.any { it.status == DownloadStatus.WAITING }) startWorker()
+                }
+            }
+        }
+    }
+
+    private suspend fun downloadNow(itemId: String, itemName: String, artistText: String): Boolean = withContext(Dispatchers.IO) {
+        val item = _downloads.value.firstOrNull { it.item.id == itemId }?.item
+            ?: JellyfinItem(id = itemId, name = itemName, artists = listOf(artistText))
         val url = repository.streamUrl(item.id)
         if (url.isBlank()) return@withContext false
-
-        _downloadingIds.value = _downloadingIds.value + item.id
 
         val selectedBitrate = repository.bitrate.value
         val qualityLabel = selectedBitrate.displayName
@@ -100,13 +162,11 @@ class DownloadManager(
         val tempFile = File(downloadsDir, "${item.id}.tmp")
 
         try {
-            val request = Request.Builder().url(url).build()
-            client.newCall(request).execute().use { response ->
+            client.newCall(Request.Builder().url(url).build()).execute().use { response ->
                 if (!response.isSuccessful) return@withContext false
                 val body = response.body ?: return@withContext false
                 val contentLength = body.contentLength()
                 val estimatedBytes = if (selectedBitrate != AudioBitrate.ORIGINAL && item.durationMs > 0L) {
-                    // MP3 output is variable bitrate; include a small allowance for headers and encoder variance.
                     ((item.durationMs / 1000.0) * selectedBitrate.kbps * 1000.0 / 8.0 * 1.03).toLong()
                 } else {
                     -1L
@@ -114,16 +174,22 @@ class DownloadManager(
                 val totalBytes = contentLength.takeIf { it > 0L } ?: estimatedBytes
                 val isEstimated = contentLength <= 0L && estimatedBytes > 0L
                 var downloadedBytes = 0L
-                _progress.value = _progress.value + (
-                    item.id to DownloadProgress(
-                        itemId = item.id,
-                        itemName = item.name,
-                        downloadedBytes = downloadedBytes,
-                        totalBytes = totalBytes,
-                        estimated = isEstimated,
-                        qualityLabel = qualityLabel,
+                fun pushProgress() {
+                    _progress.value = _progress.value + (
+                        item.id to DownloadProgress(
+                            itemId = item.id,
+                            itemName = item.name,
+                            downloadedBytes = downloadedBytes,
+                            totalBytes = totalBytes,
+                            estimated = isEstimated,
+                            qualityLabel = qualityLabel,
+                        )
                     )
-                )
+                    updateEntry(item.id) {
+                        it.copy(downloadedBytes = downloadedBytes, totalBytes = totalBytes, estimated = isEstimated)
+                    }
+                }
+                pushProgress()
                 body.byteStream().use { input ->
                     FileOutputStream(tempFile).use { output ->
                         val buffer = ByteArray(64 * 1024)
@@ -132,16 +198,7 @@ class DownloadManager(
                             if (count < 0) break
                             output.write(buffer, 0, count)
                             downloadedBytes += count
-                            _progress.value = _progress.value + (
-                                item.id to DownloadProgress(
-                                    itemId = item.id,
-                                    itemName = item.name,
-                                    downloadedBytes = downloadedBytes,
-                                    totalBytes = totalBytes,
-                                    estimated = isEstimated,
-                                    qualityLabel = qualityLabel,
-                                )
-                            )
+                            pushProgress()
                         }
                         output.fd.sync()
                     }
@@ -156,8 +213,7 @@ class DownloadManager(
                 val coverFile = File(downloadsDir, "${item.id}.jpg")
                 val coverSaved = try {
                     repository.imageUrl(item, maxWidth = 500)?.let { coverUrl ->
-                        val request = Request.Builder().url(coverUrl).build()
-                        client.newCall(request).execute().use { coverResponse ->
+                        client.newCall(Request.Builder().url(coverUrl).build()).execute().use { coverResponse ->
                             if (coverResponse.isSuccessful) {
                                 coverResponse.body?.byteStream()?.use { input ->
                                     FileOutputStream(coverFile).use { output -> input.copyTo(output) }
@@ -181,8 +237,7 @@ class DownloadManager(
                     downloadedTimeMs = System.currentTimeMillis(),
                     qualityLabel = qualityLabel,
                 )
-                val updated = _downloads.value.filter { it.item.id != item.id } + record
-                saveIndex(updated)
+                saveIndex(_downloads.value.filter { it.item.id != item.id } + record)
                 true
             } else {
                 false
@@ -191,27 +246,20 @@ class DownloadManager(
             e.printStackTrace()
             if (tempFile.exists()) tempFile.delete()
             false
-        } finally {
-            _downloadingIds.value = _downloadingIds.value - item.id
-            _progress.value = _progress.value - item.id
         }
     }
 
     fun deleteDownload(itemId: String) {
         val record = _downloads.value.firstOrNull { it.item.id == itemId } ?: return
         try {
-            val file = File(record.localFilePath)
-            if (file.exists()) {
-                file.delete()
-            }
+            File(record.localFilePath).takeIf { it.exists() }?.delete()
             record.localCoverPath?.let { coverPath ->
-                val cover = File(coverPath)
-                if (cover.exists()) cover.delete()
+                File(coverPath).takeIf { it.exists() }?.delete()
             }
         } catch (e: Exception) {
             e.printStackTrace()
         }
-        val updated = _downloads.value.filter { it.item.id != itemId }
-        saveIndex(updated)
+        saveIndex(_downloads.value.filter { it.item.id != itemId })
+        _queue.value = _queue.value.filter { it.itemId != itemId }
     }
 }

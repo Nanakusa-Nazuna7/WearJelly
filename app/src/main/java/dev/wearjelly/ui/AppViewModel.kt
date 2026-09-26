@@ -101,6 +101,7 @@ class AppViewModel(
     val downloadedSongs: StateFlow<List<dev.wearjelly.data.DownloadedSong>> = downloadManager.downloads
     val downloadingIds: StateFlow<Set<String>> = downloadManager.downloadingIds
     val downloadProgress: StateFlow<Map<String, dev.wearjelly.data.DownloadProgress>> = downloadManager.progress
+    val downloadQueue: StateFlow<List<dev.wearjelly.data.QueueEntry>> = downloadManager.queue
     val history: StateFlow<List<dev.wearjelly.data.HistoryEntry>> = historyStore.entries
     private val mutableUi = MutableStateFlow(AppUiState())
     internal val uiState = mutableUi.asStateFlow()
@@ -238,6 +239,10 @@ class AppViewModel(
         navigate(AppScreen.ScopeActions(query, title))
     }
 
+    internal fun openTrack(item: JellyfinItem, source: LibraryQuery) {
+        navigate(AppScreen.Track(item, source))
+    }
+
     internal fun navigate(screen: AppScreen) {
         if (repository.session.value == null && screen != AppScreen.Login) return
         val stack = mutableUi.value.backStack
@@ -348,15 +353,8 @@ class AppViewModel(
     internal fun isDownloaded(itemId: String): Boolean = downloadManager.isDownloaded(itemId)
 
     internal fun downloadTrack(item: JellyfinItem) {
-        viewModelScope.launch {
-            showNotice("开始下载: ${item.name}")
-            val success = downloadManager.downloadSong(item)
-            if (success) {
-                showNotice("已完成下载: ${item.name}")
-            } else {
-                showNotice("下载失败，请检查网络")
-            }
-        }
+        downloadManager.enqueue(listOf(item))
+        showNotice("已加入缓存队列")
     }
 
     internal fun deleteDownloadedTrack(itemId: String) {
@@ -370,7 +368,25 @@ class AppViewModel(
     }
 
     internal fun playTrack(item: JellyfinItem) {
-        if (playbackAction { playback.play(listOf(item)) }) navigate(AppScreen.Player)
+        if (repository.session.value == null) return
+        android.util.Log.d("WJ", "playTrack ${item.name} connected=${playback.state.value.connected}")
+        viewModelScope.launch {
+            if (!waitForConnected()) {
+                showNotice("播放器连接失败，请重试")
+                return@launch
+            }
+            playback.play(listOf(item))
+            navigate(AppScreen.Player)
+        }
+    }
+
+    private suspend fun waitForConnected(): Boolean {
+        var waited = 0
+        while (!playback.state.value.connected && waited < 3000) {
+            kotlinx.coroutines.delay(100)
+            waited += 100
+        }
+        return playback.state.value.connected
     }
 
     internal fun playLoaded(query: LibraryQuery, itemId: String? = null) {
@@ -425,14 +441,9 @@ class AppViewModel(
             showNotice("请先选择歌曲")
             return
         }
-        viewModelScope.launch {
-            selected.forEachIndexed { index, song ->
-                showNotice("正在缓存 ${index + 1}/${selected.size}: ${song.name}")
-                downloadManager.downloadSong(song)
-            }
-            showNotice("已完成 ${selected.size} 首缓存任务")
-            exitSelectionMode()
-        }
+        downloadManager.enqueue(selected)
+        showNotice("已加入缓存队列 ${selected.size} 首")
+        exitSelectionMode()
     }
 
     internal fun batchAllSongsToQueue(query: LibraryQuery) {
@@ -456,11 +467,8 @@ class AppViewModel(
                 showNotice("没有找到歌曲")
                 return@launch
             }
-            songs.forEachIndexed { index, song ->
-                showNotice("正在缓存 ${index + 1}/${songs.size}: ${song.name}")
-                downloadManager.downloadSong(song)
-            }
-            showNotice("已完成 ${songs.size} 首缓存任务")
+            downloadManager.enqueue(songs)
+            showNotice("已加入缓存队列 ${songs.size} 首")
         }
     }
 

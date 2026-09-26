@@ -167,21 +167,37 @@ fun WearJellyApp(viewModel: AppViewModel) {
                 }
             }
 
-            if (isRootScreen) {
-                screenContent()
-            } else {
-                val dismissBoxState = rememberSwipeToDismissBoxState()
-                SwipeToDismissBox(
-                    onDismissed = { viewModel.goBack() },
-                    modifier = Modifier.fillMaxSize(),
-                    content = { isBackground ->
-                        if (isBackground) {
-                            Box(modifier = Modifier.fillMaxSize().background(Color.Black))
-                        } else {
-                            screenContent()
+            Box(modifier = Modifier.fillMaxSize()) {
+                if (isRootScreen) {
+                    screenContent()
+                } else {
+                    SwipeToDismissBox(
+                        onDismissed = { viewModel.goBack() },
+                        modifier = Modifier.fillMaxSize(),
+                        content = { isBackground ->
+                            if (isBackground) {
+                                Box(modifier = Modifier.fillMaxSize().background(Color.Black))
+                            } else {
+                                screenContent()
+                            }
                         }
-                    }
-                )
+                    )
+                }
+                uiState.notice?.let { notice ->
+                    Text(
+                        text = notice,
+                        fontSize = 11.sp,
+                        color = Color.White,
+                        textAlign = TextAlign.Center,
+                        maxLines = 2,
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 18.dp, start = 24.dp, end = 24.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color(0xCC223044))
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                    )
+                }
             }
         }
     }
@@ -193,6 +209,7 @@ internal fun LoginScreen(viewModel: AppViewModel, loginUi: LoginUi) {
     val focusManager = LocalFocusManager.current
 
     ScalingLazyColumn(
+        scalingParams = EdgeScalingParams,
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
         state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -294,6 +311,7 @@ internal fun HomeScreen(viewModel: AppViewModel, account: AccountUi?) {
     val pbState by viewModel.playbackState.collectAsState()
 
     ScalingLazyColumn(
+        scalingParams = EdgeScalingParams,
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
         state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -461,6 +479,7 @@ internal fun LibraryScreen(viewModel: AppViewModel, screen: AppScreen.Library) {
         headerItems = headerItems
     ) { scaleModifier ->
         ScalingLazyColumn(
+            scalingParams = EdgeScalingParams,
             modifier = scaleModifier.fillMaxSize().padding(start = 14.dp, end = 20.dp),
             state = listState,
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -532,15 +551,19 @@ internal fun LibraryScreen(viewModel: AppViewModel, screen: AppScreen.Library) {
                         isCurrent = pbState.current?.id == item.id,
                         isPlaying = pbState.isPlaying,
                         onClick = {
-                            if (selectionMode && isSongsScreen) {
-                                viewModel.toggleSongSelection(item.id)
-                            } else {
-                                viewModel.openItem(screen.query, item)
+                            android.util.Log.d("WJ", "row tap ${item.name} kind=${screen.query.kind} sel=$selectionMode")
+                            when {
+                                selectionMode && isSongsScreen -> viewModel.toggleSongSelection(item.id)
+                                screen.query.kind == LibraryKind.SONGS ||
+                                    screen.query.kind == LibraryKind.DOWNLOADS -> viewModel.playTrack(item)
+                                else -> viewModel.openItem(screen.query, item)
                             }
                         },
                         onLongClick = {
+                            android.util.Log.d("WJ", "row long ${item.name} kind=${screen.query.kind}")
                             when (screen.query.kind) {
-                                LibraryKind.SONGS -> viewModel.toggleSongSelection(item.id)
+                                LibraryKind.SONGS, LibraryKind.DOWNLOADS ->
+                                    viewModel.openTrack(item, screen.query)
                                 LibraryKind.ARTISTS, LibraryKind.ALBUMS ->
                                     viewModel.openScopeActions(screen.query, item.name)
                                 else -> Unit
@@ -797,6 +820,20 @@ private fun AlphabetListScaffold(
 
 private const val RING_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ#"
 
+/**
+ * 全局列表缩放（WearOS 6 参考）：中央两项保持最大，向上下边缘快速等比缩小。
+ * transitionArea 收窄使衰减集中在中心附近，边缘元素明显更小。
+ */
+private val EdgeScalingParams = androidx.wear.compose.foundation.lazy.ScalingLazyColumnDefaults.scalingParams(
+    edgeScale = 0.45f,
+    edgeAlpha = 0.75f,
+    minElementHeight = 20f,
+    maxElementHeight = 48f,
+    minTransitionArea = 4000f,
+    maxTransitionArea = 12000f,
+    viewportVerticalOffsetResolver = { constraints -> constraints.maxHeight / 2 },
+)
+
 /** 长文本末尾渐隐（非生硬省略号） */
 @Composable
 private fun FadingEdgeText(
@@ -884,7 +921,7 @@ internal fun LibraryItemRow(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(54.dp)
+            .height(48.dp)
             .clip(RoundedCornerShape(percent = 50))
             .background(rowBg)
             .combinedClickable(
@@ -946,6 +983,7 @@ internal fun ScopeActionsScreen(viewModel: AppViewModel, screen: AppScreen.Scope
     val listState = rememberScalingLazyListState()
 
     ScalingLazyColumn(
+        scalingParams = EdgeScalingParams,
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
         state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1007,6 +1045,7 @@ internal fun TrackDetailScreen(viewModel: AppViewModel, item: JellyfinItem, sour
     val isDownloaded = viewModel.isDownloaded(item.id)
 
     ScalingLazyColumn(
+        scalingParams = EdgeScalingParams,
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
         state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1030,21 +1069,23 @@ internal fun TrackDetailScreen(viewModel: AppViewModel, item: JellyfinItem, sour
             )
         }
 
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Button(
-                    onClick = { viewModel.batchAllSongsToQueue(source) },
-                    modifier = Modifier.weight(1f).height(44.dp),
-                    colors = ButtonDefaults.primaryButtonColors()
-                ) {
-                    Text("全部入队", fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-                Button(
-                    onClick = { viewModel.batchAllSongsToCache(source) },
-                    modifier = Modifier.weight(1f).height(44.dp),
-                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF4A5568))
-                ) {
-                    Text("全部缓存", fontSize = 10.sp, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (source.kind == LibraryKind.SONGS) {
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Button(
+                        onClick = { viewModel.batchAllSongsToQueue(source) },
+                        modifier = Modifier.weight(1f).height(44.dp),
+                        colors = ButtonDefaults.primaryButtonColors()
+                    ) {
+                        Text("全部入队", fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    Button(
+                        onClick = { viewModel.batchAllSongsToCache(source) },
+                        modifier = Modifier.weight(1f).height(44.dp),
+                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF4A5568))
+                    ) {
+                        Text("全部缓存", fontSize = 10.sp, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
                 }
             }
         }
@@ -1063,16 +1104,30 @@ internal fun TrackDetailScreen(viewModel: AppViewModel, item: JellyfinItem, sour
             }
         }
 
-        item {
-            Button(
-                onClick = { viewModel.playLoaded(source, item.id) },
-                modifier = Modifier.fillMaxWidth().height(42.dp),
-                colors = ButtonDefaults.secondaryButtonColors()
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("以此开始播放全部")
+        if (source.kind == LibraryKind.SONGS) {
+            item {
+                Button(
+                    onClick = { viewModel.playLoaded(source, item.id) },
+                    modifier = Modifier.fillMaxWidth().height(42.dp),
+                    colors = ButtonDefaults.secondaryButtonColors()
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("以此开始播放全部")
+                    }
+                }
+            }
+            item {
+                Button(
+                    onClick = {
+                        viewModel.enterSelectionMode()
+                        viewModel.goBack()
+                    },
+                    modifier = Modifier.fillMaxWidth().height(42.dp),
+                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF4A5568))
+                ) {
+                    Text("多选歌曲", color = Color.White, maxLines = 1)
                 }
             }
         }
@@ -1143,6 +1198,7 @@ internal fun PlayerScreen(viewModel: AppViewModel) {
     val item = pbState.current
 
     ScalingLazyColumn(
+        scalingParams = EdgeScalingParams,
         modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp),
         state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1378,6 +1434,7 @@ internal fun QueueScreen(viewModel: AppViewModel) {
     val listState = rememberScalingLazyListState()
 
     ScalingLazyColumn(
+        scalingParams = EdgeScalingParams,
         modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp),
         state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1467,6 +1524,7 @@ internal fun LyricsScreen(viewModel: AppViewModel) {
     val lyrics = uiState.lyrics.lyrics
 
     ScalingLazyColumn(
+        scalingParams = EdgeScalingParams,
         modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
         state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1509,22 +1567,23 @@ internal fun LyricsScreen(viewModel: AppViewModel) {
 }
 
 @Composable
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 internal fun DownloadsScreen(viewModel: AppViewModel) {
     val listState = rememberScalingLazyListState()
     val downloaded by viewModel.downloadedSongs.collectAsState()
     val pbState by viewModel.playbackState.collectAsState()
-    val progressMap by viewModel.downloadProgress.collectAsState()
-    val history by viewModel.history.collectAsState()
+    val queue by viewModel.downloadQueue.collectAsState()
     var sectionExpanded by remember { mutableStateOf(true) }
 
-    val sortedDownloaded = remember(downloaded, history) {
+    val sortedDownloaded = remember(downloaded, viewModel.history) {
+        val history = viewModel.history.value
         downloaded.sortedByDescending { song ->
             val playedAt = history.firstOrNull { it.item.id == song.item.id }?.playedAtMs ?: 0L
             if (playedAt > 0L) playedAt else song.downloadedTimeMs
         }
     }
 
-    val headerItems = 1 + (if (progressMap.isNotEmpty()) 1 else 0) + (if (progressMap.isNotEmpty() && sectionExpanded) progressMap.size else 0)
+    val headerItems = 1 + (if (queue.isNotEmpty()) 1 else 0) + (if (queue.isNotEmpty() && sectionExpanded) queue.size else 0)
 
     AlphabetListScaffold(
         items = sortedDownloaded.map { it.item },
@@ -1532,10 +1591,11 @@ internal fun DownloadsScreen(viewModel: AppViewModel) {
         headerItems = headerItems
     ) { scaleModifier ->
     ScalingLazyColumn(
-        modifier = scaleModifier.fillMaxSize().padding(horizontal = 8.dp),
+        scalingParams = EdgeScalingParams,
+        modifier = scaleModifier.fillMaxSize().padding(start = 14.dp, end = 20.dp),
         state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         item {
             Text(
@@ -1546,36 +1606,22 @@ internal fun DownloadsScreen(viewModel: AppViewModel) {
             )
         }
 
-        if (progressMap.isNotEmpty()) {
+        if (queue.isNotEmpty()) {
             item {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center,
+                Text(
+                    text = "缓存队列 (${queue.size}) " + if (sectionExpanded) "▲" else "▼",
+                    fontSize = 11.sp,
+                    color = Color(0xFF8A93A5),
+                    textAlign = TextAlign.Center,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(percent = 50))
-                        .background(Color(0xFF1B2A44))
                         .clickable { sectionExpanded = !sectionExpanded }
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                ) {
-                    Text(
-                        text = "后台缓存 (${progressMap.size})",
-                        fontSize = 12.sp,
-                        color = Color.White,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        text = if (sectionExpanded) "▲" else "▼",
-                        fontSize = 10.sp,
-                        color = Color.LightGray
-                    )
-                }
+                        .padding(vertical = 4.dp)
+                )
             }
 
             if (sectionExpanded) {
-                items(progressMap.values.toList()) { progress ->
+                items(queue) { entry ->
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1583,51 +1629,69 @@ internal fun DownloadsScreen(viewModel: AppViewModel) {
                             .background(Color(0xFF14202F))
                             .padding(horizontal = 10.dp, vertical = 6.dp)
                     ) {
-                        Text(
-                            text = progress.itemName.ifBlank { "歌曲" },
-                            fontSize = 11.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            color = Color.White
-                        )
-                        Spacer(Modifier.height(3.dp))
-                        val fraction = progress.fraction
-                        if (fraction != null) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(4.dp)
-                                    .clip(RoundedCornerShape(2.dp))
-                                    .background(Color.DarkGray)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth(fraction)
-                                        .height(4.dp)
-                                        .background(MaterialTheme.colors.primary)
-                                )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            when (entry.status) {
+                                dev.wearjelly.data.DownloadStatus.RUNNING ->
+                                    CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 2.dp)
+                                dev.wearjelly.data.DownloadStatus.DONE ->
+                                    Text("✓", color = Color(0xFF7BD88F), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                dev.wearjelly.data.DownloadStatus.FAILED ->
+                                    Text("✗", color = MaterialTheme.colors.error, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                dev.wearjelly.data.DownloadStatus.WAITING ->
+                                    Text("…", color = Color(0xFF8A93A5), fontSize = 12.sp)
                             }
-                            Spacer(Modifier.height(2.dp))
-                            val prefix = if (progress.estimated) "约 " else ""
-                            Text(
-                                text = "${progress.qualityLabel} · ${prefix}${(fraction * 100).toInt()}% · ${formatBytes(progress.downloadedBytes)}",
-                                fontSize = 9.sp,
-                                color = Color.LightGray,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                            Spacer(Modifier.width(6.dp))
+                            FadingEdgeText(
+                                entry.itemName,
+                                fontSize = 11.sp,
+                                color = Color.White,
+                                fadeColor = Color(0xFF14202F),
+                                modifier = Modifier.weight(1f)
                             )
-                        } else {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 2.dp)
-                                Spacer(Modifier.width(6.dp))
-                                Text(
-                                    text = "${progress.qualityLabel} · 已下载 ${formatBytes(progress.downloadedBytes)}",
-                                    fontSize = 9.sp,
-                                    color = Color.LightGray,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                        }
+                        when (entry.status) {
+                            dev.wearjelly.data.DownloadStatus.RUNNING -> {
+                                Spacer(Modifier.height(3.dp))
+                                val fraction = (entry.totalBytes.takeIf { it > 0 }?.let { entry.downloadedBytes.toFloat() / it } )
+                                if (fraction != null) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(4.dp)
+                                            .clip(RoundedCornerShape(2.dp))
+                                            .background(Color.DarkGray)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth(fraction.coerceIn(0f, 1f))
+                                                .height(4.dp)
+                                                .background(MaterialTheme.colors.primary)
+                                        )
+                                    }
+                                    Spacer(Modifier.height(2.dp))
+                                    val prefix = if (entry.estimated) "约 " else ""
+                                    Text(
+                                        text = "${entry.qualityLabel} · ${prefix}${(fraction * 100).toInt()}% · ${formatBytes(entry.downloadedBytes)}",
+                                        fontSize = 9.sp,
+                                        color = Color.LightGray,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                } else {
+                                    Text(
+                                        text = "${entry.qualityLabel} · 已下载 ${formatBytes(entry.downloadedBytes)}",
+                                        fontSize = 9.sp,
+                                        color = Color.LightGray,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                             }
+                            dev.wearjelly.data.DownloadStatus.WAITING ->
+                                Text("排队中 · ${entry.qualityLabel}", fontSize = 9.sp, color = Color(0xFF8A93A5))
+                            dev.wearjelly.data.DownloadStatus.DONE -> Unit
+                            dev.wearjelly.data.DownloadStatus.FAILED ->
+                                Text("缓存失败，请检查网络后重试", fontSize = 9.sp, color = Color(0xFF8A93A5))
                         }
                     }
                 }
@@ -1640,12 +1704,19 @@ internal fun DownloadsScreen(viewModel: AppViewModel) {
             itemsIndexed(sortedDownloaded) { _, downloadedSong ->
                 val item = downloadedSong.item
                 val rowBg = if (pbState.current?.id == item.id) Color(0xFF123B63) else MaterialTheme.colors.surface
-                Button(
-                    onClick = { viewModel.playTrack(item) },
-                    modifier = Modifier.fillMaxWidth().height(54.dp),
-                    colors = ButtonDefaults.buttonColors(backgroundColor = rowBg)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .clip(RoundedCornerShape(percent = 50))
+                        .background(rowBg)
+                        .combinedClickable(
+                            onClick = { viewModel.playTrack(item) },
+                            onLongClick = { viewModel.openTrack(item, LibraryQuery(LibraryKind.DOWNLOADS)) }
+                        )
+                        .padding(horizontal = 16.dp)
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxSize()) {
                         if (pbState.current?.id == item.id) {
                             EqualizerBars(playing = pbState.isPlaying, color = MaterialTheme.colors.primary)
                         } else {
@@ -1659,12 +1730,6 @@ internal fun DownloadsScreen(viewModel: AppViewModel) {
                                 fontSize = 9.sp, color = Color(0xFF8A93A5), fadeColor = rowBg
                             )
                         }
-                        Icon(
-                            Icons.Default.Delete,
-                            contentDescription = "删除缓存",
-                            tint = Color(0xFF8A93A5),
-                            modifier = Modifier.size(20.dp).clickable { viewModel.deleteDownloadedTrack(item.id) }
-                        )
                     }
                 }
             }
@@ -1674,6 +1739,7 @@ internal fun DownloadsScreen(viewModel: AppViewModel) {
 }
 
 @Composable
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 internal fun HistoryScreen(viewModel: AppViewModel) {
     val listState = rememberScalingLazyListState()
     val history by viewModel.history.collectAsState()
@@ -1685,6 +1751,7 @@ internal fun HistoryScreen(viewModel: AppViewModel) {
         headerItems = 1
     ) { scaleModifier ->
     ScalingLazyColumn(
+        scalingParams = EdgeScalingParams,
         modifier = scaleModifier.fillMaxSize().padding(horizontal = 8.dp),
         state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1704,12 +1771,19 @@ internal fun HistoryScreen(viewModel: AppViewModel) {
             itemsIndexed(history) { _, entry ->
                 val item = entry.item
                 val rowBg = if (pbState.current?.id == item.id) Color(0xFF123B63) else MaterialTheme.colors.surface
-                Button(
-                    onClick = { viewModel.playTrack(item) },
-                    modifier = Modifier.fillMaxWidth().height(54.dp),
-                    colors = ButtonDefaults.buttonColors(backgroundColor = rowBg)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .clip(RoundedCornerShape(percent = 50))
+                        .background(rowBg)
+                        .combinedClickable(
+                            onClick = { viewModel.playTrack(item) },
+                            onLongClick = { viewModel.openTrack(item, LibraryQuery(LibraryKind.DOWNLOADS)) }
+                        )
+                        .padding(horizontal = 16.dp)
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxSize()) {
                         if (pbState.current?.id == item.id) {
                             EqualizerBars(playing = pbState.isPlaying, color = MaterialTheme.colors.primary)
                         } else {
@@ -1734,6 +1808,7 @@ internal fun SettingsScreen(viewModel: AppViewModel, account: AccountUi?) {
     val currentBitrate by viewModel.bitrate.collectAsState()
 
     ScalingLazyColumn(
+        scalingParams = EdgeScalingParams,
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
         state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
