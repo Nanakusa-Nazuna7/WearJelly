@@ -18,7 +18,10 @@ data class PlaybackState(
     val buffering: Boolean = false,
     val positionMs: Long = 0L,
     val durationMs: Long = 0L,
+    val bufferedPositionMs: Long = 0L,
+    val bufferedPercentage: Int = 0,
     val error: String? = null,
     val repeatMode: Int = 0,
-    val shuffleEnabled: Boolean = false
+    val shuffleEnabled: Boolean = false,
+    val volumePercent: Int = 0
 )

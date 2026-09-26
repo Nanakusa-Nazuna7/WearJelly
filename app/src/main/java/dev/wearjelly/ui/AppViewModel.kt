@@ -36,6 +36,9 @@ internal sealed interface AppScreen {
     data object Player : AppScreen
     data object Queue : AppScreen
     data object Lyrics : AppScreen
+    data object Downloads : AppScreen
+    data object History : AppScreen
+    data class ScopeActions(val query: LibraryQuery, val title: String) : AppScreen
     data object Settings : AppScreen
     data class Confirm(val action: ConfirmAction) : AppScreen
 }
@@ -80,16 +83,25 @@ internal data class AppUiState(
     val lyrics: LyricsUi = LyricsUi(),
     val notice: String? = null,
     val sessionGeneration: Long = 0,
+    val selectionMode: Boolean = false,
+    val selectedSongIds: Set<String> = emptySet(),
 ) {
     val screen: AppScreen get() = backStack.last()
 }
 
 class AppViewModel(
-    private val repository: JellyfinRepository,
-    private val playback: PlaybackConnection,
+    val repository: JellyfinRepository,
+    val playback: PlaybackConnection,
+    val downloadManager: dev.wearjelly.data.DownloadManager,
+    val historyStore: dev.wearjelly.data.HistoryStore
 ) : ViewModel() {
     val session: StateFlow<ServerSession?> = repository.session
     val playbackState: StateFlow<PlaybackState> = playback.state
+    val bitrate: StateFlow<dev.wearjelly.data.AudioBitrate> = repository.bitrate
+    val downloadedSongs: StateFlow<List<dev.wearjelly.data.DownloadedSong>> = downloadManager.downloads
+    val downloadingIds: StateFlow<Set<String>> = downloadManager.downloadingIds
+    val downloadProgress: StateFlow<Map<String, dev.wearjelly.data.DownloadProgress>> = downloadManager.progress
+    val history: StateFlow<List<dev.wearjelly.data.HistoryEntry>> = historyStore.entries
     private val mutableUi = MutableStateFlow(AppUiState())
     internal val uiState = mutableUi.asStateFlow()
 
@@ -213,13 +225,17 @@ class AppViewModel(
             LibraryKind.ALBUMS -> navigate(
                 AppScreen.Library(LibraryQuery(LibraryKind.SONGS, parentId = item.id), item.name),
             )
-            LibraryKind.SONGS -> navigate(AppScreen.Track(item, query))
+            LibraryKind.SONGS, LibraryKind.DOWNLOADS -> navigate(AppScreen.Track(item, query))
         }
     }
 
     internal fun openArtistSongs(screen: AppScreen.Library) {
         val artistId = screen.query.artistId ?: return
         navigate(AppScreen.Library(LibraryQuery(LibraryKind.SONGS, artistId = artistId), screen.title))
+    }
+
+    internal fun openScopeActions(query: LibraryQuery, title: String) {
+        navigate(AppScreen.ScopeActions(query, title))
     }
 
     internal fun navigate(screen: AppScreen) {
@@ -274,32 +290,42 @@ class AppViewModel(
 
     private fun loadLibrary(query: LibraryQuery, fromStart: Boolean) {
         if (repository.session.value == null) return
+        if (query.kind == LibraryKind.DOWNLOADS) return
         val old = mutableUi.value.libraries[query] ?: LibraryUi()
         if (old.loading && !fromStart) return
         libraryJobs.remove(query)?.cancel()
         val requestGeneration = generation
-        val offset = if (fromStart) 0 else old.nextOffset
         updateLibrary(query) { copy(loading = true, error = null, retryFromStart = fromStart) }
         libraryJobs[query] = viewModelScope.launch {
             try {
-                val page = repository.getItems(
-                    kind = query.kind,
-                    parentId = query.parentId,
-                    artistId = query.artistId,
-                    startIndex = offset,
-                    limit = PAGE_SIZE,
-                )
-                if (requestGeneration != generation) return@launch
-                val combined = ((if (fromStart) emptyList() else old.items) + page.items).distinctBy { it.id }
-                val next = offset + page.items.size
+                // 全量拉取后按英文/拼音首字母 A-Z# 本地排序，保证字母条顺序正确
+                val all = mutableListOf<JellyfinItem>()
+                var offset = if (fromStart) 0 else old.nextOffset
+                if (!fromStart) all += old.items
+                var total = Int.MAX_VALUE
+                while (offset < total && offset < MAX_FETCH_ITEMS) {
+                    val page = repository.getItems(
+                        kind = query.kind,
+                        parentId = query.parentId,
+                        artistId = query.artistId,
+                        startIndex = offset,
+                        limit = PAGE_SIZE,
+                    )
+                    if (requestGeneration != generation) return@launch
+                    total = page.totalRecordCount
+                    all += page.items
+                    offset += page.items.size
+                    if (page.items.isEmpty()) break
+                }
+                val sorted = dev.wearjelly.data.PinyinSort.sort(all.distinctBy { it.id })
                 updateLibrary(query) {
                     copy(
-                        items = combined,
-                        total = maxOf(page.totalRecordCount, combined.size),
-                        nextOffset = next,
+                        items = sorted,
+                        total = sorted.size,
+                        nextOffset = sorted.size,
                         loading = false,
                         loaded = true,
-                        endReached = page.items.isEmpty() || next >= page.totalRecordCount,
+                        endReached = true,
                         error = null,
                     )
                 }
@@ -319,6 +345,30 @@ class AppViewModel(
         }
     }
 
+    internal fun isDownloaded(itemId: String): Boolean = downloadManager.isDownloaded(itemId)
+
+    internal fun downloadTrack(item: JellyfinItem) {
+        viewModelScope.launch {
+            showNotice("开始下载: ${item.name}")
+            val success = downloadManager.downloadSong(item)
+            if (success) {
+                showNotice("已完成下载: ${item.name}")
+            } else {
+                showNotice("下载失败，请检查网络")
+            }
+        }
+    }
+
+    internal fun deleteDownloadedTrack(itemId: String) {
+        downloadManager.deleteDownload(itemId)
+        showNotice("已删除本地缓存")
+    }
+
+    internal fun setAudioBitrate(bitrate: dev.wearjelly.data.AudioBitrate) {
+        repository.setBitrate(bitrate)
+        showNotice("已切换音质: ${bitrate.displayName}")
+    }
+
     internal fun playTrack(item: JellyfinItem) {
         if (playbackAction { playback.play(listOf(item)) }) navigate(AppScreen.Player)
     }
@@ -334,8 +384,123 @@ class AppViewModel(
         if (playbackAction { playback.play(items, index) }) navigate(AppScreen.Player)
     }
 
+    internal fun toggleSongSelection(itemId: String) {
+        mutableUi.update { state ->
+            val next = state.selectedSongIds.toMutableSet().apply {
+                if (!add(itemId)) remove(itemId)
+            }
+            state.copy(selectionMode = true, selectedSongIds = next)
+        }
+    }
+
+    internal fun enterSelectionMode() {
+        mutableUi.update { it.copy(selectionMode = true, selectedSongIds = emptySet()) }
+    }
+
+    internal fun exitSelectionMode() {
+        mutableUi.update { it.copy(selectionMode = false, selectedSongIds = emptySet()) }
+    }
+
+    internal fun batchSelectedSongsToQueue(items: List<JellyfinItem>) {
+        val selected = items.filter { it.id in mutableUi.value.selectedSongIds }
+        if (selected.isEmpty()) {
+            showNotice("请先选择歌曲")
+            return
+        }
+        viewModelScope.launch {
+            val result = playback.enqueueMany(selected)
+            result.fold(
+                onSuccess = {
+                    showNotice("已加入 ${selected.size} 首歌曲")
+                    exitSelectionMode()
+                },
+                onFailure = { showNotice(it.localizedMessage ?: "批量加入队列失败") },
+            )
+        }
+    }
+
+    internal fun batchSelectedSongsToCache(items: List<JellyfinItem>) {
+        val selected = items.filter { it.id in mutableUi.value.selectedSongIds }
+        if (selected.isEmpty()) {
+            showNotice("请先选择歌曲")
+            return
+        }
+        viewModelScope.launch {
+            selected.forEachIndexed { index, song ->
+                showNotice("正在缓存 ${index + 1}/${selected.size}: ${song.name}")
+                downloadManager.downloadSong(song)
+            }
+            showNotice("已完成 ${selected.size} 首缓存任务")
+            exitSelectionMode()
+        }
+    }
+
+    internal fun batchAllSongsToQueue(query: LibraryQuery) {
+        viewModelScope.launch {
+            val songs = loadAllSongs(query)
+            if (songs.isEmpty()) {
+                showNotice("没有找到歌曲")
+                return@launch
+            }
+            playback.enqueueMany(songs).fold(
+                onSuccess = { showNotice("已加入 ${songs.size} 首歌曲") },
+                onFailure = { showNotice(it.localizedMessage ?: "批量加入队列失败") },
+            )
+        }
+    }
+
+    internal fun batchAllSongsToCache(query: LibraryQuery) {
+        viewModelScope.launch {
+            val songs = loadAllSongs(query)
+            if (songs.isEmpty()) {
+                showNotice("没有找到歌曲")
+                return@launch
+            }
+            songs.forEachIndexed { index, song ->
+                showNotice("正在缓存 ${index + 1}/${songs.size}: ${song.name}")
+                downloadManager.downloadSong(song)
+            }
+            showNotice("已完成 ${songs.size} 首缓存任务")
+        }
+    }
+
+    private suspend fun loadAllSongs(query: LibraryQuery): List<JellyfinItem> {
+        if (query.kind == LibraryKind.SONGS && mutableUi.value.libraries[query]?.endReached == true) {
+            return mutableUi.value.libraries[query]?.items.orEmpty()
+        }
+        val result = mutableListOf<JellyfinItem>()
+        var offset = 0
+        while (true) {
+            val page = repository.getItems(
+                kind = LibraryKind.SONGS,
+                parentId = query.parentId,
+                artistId = query.artistId,
+                startIndex = offset,
+                limit = PAGE_SIZE,
+            )
+            result += page.items
+            offset += page.items.size
+            if (page.items.isEmpty() || offset >= page.totalRecordCount) break
+        }
+        return result.distinctBy { it.id }
+    }
+
+    internal fun adjustVolume(direction: Int) = playback.adjustVolume(direction)
+
     internal fun enqueue(item: JellyfinItem) {
-        if (playbackAction { playback.enqueue(item) }) showNotice("已加入播放队列")
+        if (repository.session.value == null) return
+        if (!playback.state.value.connected) {
+            reconnectPlayback()
+            showNotice("播放器正在连接，请稍后重试。")
+            return
+        }
+        viewModelScope.launch {
+            val result = playback.enqueue(item)
+            result.fold(
+                onSuccess = { showNotice("已加入播放队列") },
+                onFailure = { error -> showNotice(error.localizedMessage ?: "加入播放队列失败") },
+            )
+        }
     }
 
     internal fun togglePlayPause() { playbackAction { playback.togglePlayPause() } }
@@ -494,7 +659,10 @@ class AppViewModel(
         else -> "错误: ${error.localizedMessage ?: error.javaClass.simpleName}"
     }
 
-    private companion object { const val PAGE_SIZE = 60 }
+    private companion object {
+        const val PAGE_SIZE = 60
+        const val MAX_FETCH_ITEMS = 3000
+    }
 }
 
 internal val LibraryKind.chineseTitle: String
@@ -502,6 +670,7 @@ internal val LibraryKind.chineseTitle: String
         LibraryKind.ARTISTS -> "艺人"
         LibraryKind.ALBUMS -> "专辑"
         LibraryKind.SONGS -> "歌曲"
+        LibraryKind.DOWNLOADS -> "已缓存音乐"
     }
 
 internal val PlaybackState.effectiveDurationMs: Long

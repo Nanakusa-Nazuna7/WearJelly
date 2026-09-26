@@ -127,6 +127,7 @@ class JellyfinRepository(
                 }
                 sb
             }
+            LibraryKind.DOWNLOADS -> throw JellyfinException("已缓存音乐从本地读取")
         }
 
         urlBuilder.append("&Fields=ItemCounts,PrimaryImageAspectRatio,CanDelete,MediaSourceCount")
@@ -147,13 +148,26 @@ class JellyfinRepository(
         }
     }
 
+    val bitrate: StateFlow<AudioBitrate> = store.bitrate
+
+    fun setBitrate(newBitrate: AudioBitrate) {
+        store.setBitrate(newBitrate)
+    }
+
     fun streamUrl(itemId: String): String {
         val currentSession = session.value ?: return ""
         val server = currentSession.serverUrl
         val userId = currentSession.userId
         val deviceId = store.deviceId
         val token = currentSession.accessToken
-        return "$server/Audio/$itemId/stream?static=true&UserId=$userId&DeviceId=$deviceId&api_key=$token"
+        val currentBitrate = store.bitrate.value
+
+        return if (currentBitrate == AudioBitrate.ORIGINAL) {
+            "$server/Audio/$itemId/stream?static=true&UserId=$userId&DeviceId=$deviceId&api_key=$token"
+        } else {
+            val bps = currentBitrate.kbps * 1000
+            "$server/Audio/$itemId/stream.mp3?audioCodec=mp3&audioBitRate=$bps&maxStreamingBitrate=$bps&UserId=$userId&DeviceId=$deviceId&api_key=$token"
+        }
     }
 
     fun imageUrl(item: JellyfinItem, maxWidth: Int = 300): String? {

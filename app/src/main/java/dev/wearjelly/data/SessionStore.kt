@@ -24,6 +24,9 @@ class SessionStore(
     private val _session = MutableStateFlow<ServerSession?>(null)
     val session: StateFlow<ServerSession?> = _session.asStateFlow()
 
+    private val _bitrate = MutableStateFlow(AudioBitrate.MEDIUM)
+    val bitrate: StateFlow<AudioBitrate> = _bitrate.asStateFlow()
+
     val deviceId: String by lazy { getOrCreateDeviceId() }
 
     private val sessionFile: File
@@ -31,6 +34,24 @@ class SessionStore(
 
     init {
         loadSession()
+        loadBitrate()
+    }
+
+    fun setBitrate(newBitrate: AudioBitrate) {
+        val sp = context.getSharedPreferences("wearjelly_settings", Context.MODE_PRIVATE)
+        sp.edit().putString("audio_bitrate", newBitrate.name).apply()
+        _bitrate.value = newBitrate
+    }
+
+    private fun loadBitrate() {
+        val sp = context.getSharedPreferences("wearjelly_settings", Context.MODE_PRIVATE)
+        val name = sp.getString("audio_bitrate", AudioBitrate.MEDIUM.name)
+        val found = try {
+            AudioBitrate.valueOf(name ?: AudioBitrate.MEDIUM.name)
+        } catch (_: Exception) {
+            AudioBitrate.MEDIUM
+        }
+        _bitrate.value = found
     }
 
     private fun getOrCreateDeviceId(): String {

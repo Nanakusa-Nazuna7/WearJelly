@@ -39,6 +39,8 @@ import org.koin.android.ext.android.inject
 class PlaybackService : MediaSessionService() {
 
     private val repository: JellyfinRepository by inject()
+    private val downloadManager: dev.wearjelly.data.DownloadManager by inject()
+    private val historyStore: dev.wearjelly.data.HistoryStore by inject()
     private val json: Json by inject()
 
     private var player: ExoPlayer? = null
@@ -51,6 +53,7 @@ class PlaybackService : MediaSessionService() {
     companion object {
         const val CUSTOM_COMMAND_SET_QUEUE = "dev.wearjelly.SET_QUEUE"
         const val CUSTOM_COMMAND_ENQUEUE = "dev.wearjelly.ENQUEUE"
+        const val CUSTOM_COMMAND_ENQUEUE_MANY = "dev.wearjelly.ENQUEUE_MANY"
         const val CUSTOM_COMMAND_REMOVE_AT = "dev.wearjelly.REMOVE_AT"
         const val CUSTOM_COMMAND_MOVE_ITEM = "dev.wearjelly.MOVE_ITEM"
         const val CUSTOM_COMMAND_CLEAR_QUEUE = "dev.wearjelly.CLEAR_QUEUE"
@@ -87,6 +90,29 @@ class PlaybackService : MediaSessionService() {
         )
 
         val callback = object : MediaSession.Callback {
+            override fun onConnect(
+                session: MediaSession,
+                controller: MediaSession.ControllerInfo
+            ): MediaSession.ConnectionResult {
+                val isOwnApp = controller.packageName == packageName
+                val isSystemController = controller.controllerVersion == 0
+                if (!isOwnApp && !isSystemController) {
+                    return MediaSession.ConnectionResult.reject()
+                }
+                val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
+                    .add(SessionCommand(CUSTOM_COMMAND_SET_QUEUE, Bundle.EMPTY))
+                    .add(SessionCommand(CUSTOM_COMMAND_ENQUEUE, Bundle.EMPTY))
+                    .add(SessionCommand(CUSTOM_COMMAND_ENQUEUE_MANY, Bundle.EMPTY))
+                    .add(SessionCommand(CUSTOM_COMMAND_REMOVE_AT, Bundle.EMPTY))
+                    .add(SessionCommand(CUSTOM_COMMAND_MOVE_ITEM, Bundle.EMPTY))
+                    .add(SessionCommand(CUSTOM_COMMAND_CLEAR_QUEUE, Bundle.EMPTY))
+                    .build()
+                return MediaSession.ConnectionResult.accept(
+                    commands,
+                    MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS
+                )
+            }
+
             override fun onCustomCommand(
                 session: MediaSession,
                 controller: MediaSession.ControllerInfo,
@@ -114,6 +140,20 @@ class PlaybackService : MediaSessionService() {
                                 handleEnqueue(item)
                             } catch (e: Exception) {
                                 e.printStackTrace()
+                            }
+                        }
+                    }
+                    CUSTOM_COMMAND_ENQUEUE_MANY -> {
+                        val itemsJson = args.getString(EXTRA_ITEMS_JSON)
+                        if (!itemsJson.isNullOrBlank()) {
+                            try {
+                                val items = json.decodeFromString<List<JellyfinItem>>(itemsJson)
+                                handleEnqueueMany(items)
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                                return Futures.immediateFuture(
+                                    SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE)
+                                )
                             }
                         }
                     }
@@ -167,6 +207,7 @@ class PlaybackService : MediaSessionService() {
                 }
                 currentPlayingItemId = newId
                 if (newId != null && player?.isPlaying == true) {
+                    recordHistory(newId)
                     reportEvent(PlaybackEvent.START)
                 }
             }
@@ -195,17 +236,39 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun handleEnqueue(item: JellyfinItem) {
+        handleEnqueueMany(listOf(item))
+    }
+
+    private fun handleEnqueueMany(items: List<JellyfinItem>) {
+        if (items.isEmpty()) return
         val exo = player ?: return
-        val mediaItem = createMediaItem(item)
-        exo.addMediaItem(mediaItem)
+        exo.addMediaItems(items.map(::createMediaItem))
         if (exo.playbackState == Player.STATE_IDLE) {
             exo.prepare()
         }
     }
 
+    private fun recordHistory(itemId: String) {
+        val exo = player ?: return
+        val raw = exo.currentMediaItem?.mediaMetadata?.extras?.getString("jellyfin_item_json")
+        if (raw.isNullOrBlank()) return
+        try {
+            historyStore.record(json.decodeFromString<JellyfinItem>(raw))
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
     private fun createMediaItem(item: JellyfinItem): MediaItem {
-        val streamUri = Uri.parse(repository.streamUrl(item.id))
-        val artworkUri = repository.imageUrl(item)?.let { Uri.parse(it) }
+        val localPath = downloadManager.getLocalFilePath(item.id)
+        val streamUri = if (!localPath.isNullOrBlank()) {
+            Uri.fromFile(java.io.File(localPath))
+        } else {
+            Uri.parse(repository.streamUrl(item.id))
+        }
+        val localCoverPath = downloadManager.getLocalCoverPath(item.id)
+        val artworkUri = localCoverPath?.let { Uri.fromFile(java.io.File(it)) }
+            ?: repository.imageUrl(item)?.let { Uri.parse(it) }
 
         val metadata = MediaMetadata.Builder()
             .setTitle(item.name)

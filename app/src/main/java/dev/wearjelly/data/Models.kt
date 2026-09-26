@@ -21,6 +21,7 @@ data class JellyfinItem(
     @SerialName("Album") val album: String? = null,
     @SerialName("AlbumId") val albumId: String? = null,
     @SerialName("RunTimeTicks") val runTimeTicks: Long? = null,
+    @SerialName("Container") val container: String? = null,
     @SerialName("ImageTags") val imageTags: Map<String, String> = emptyMap(),
     @SerialName("AlbumPrimaryImageTag") val albumPrimaryImageTag: String? = null,
     @SerialName("IndexNumber") val indexNumber: Int? = null,
@@ -61,7 +62,46 @@ data class SongLyrics(
 enum class LibraryKind {
     ARTISTS,
     ALBUMS,
-    SONGS
+    SONGS,
+    DOWNLOADS
+}
+
+enum class AudioBitrate(val kbps: Int, val displayName: String) {
+    ORIGINAL(0, "无损/原音频"),
+    LOW(96, "96 kbps (省流)"),
+    MEDIUM(160, "160 kbps (流畅)"),
+    HIGH(320, "320 kbps (高品质)")
+}
+
+@Serializable
+data class DownloadedSong(
+    val item: JellyfinItem,
+    val localFilePath: String,
+    val localCoverPath: String? = null,
+    val downloadedTimeMs: Long,
+    val qualityLabel: String = "未知音质"
+)
+
+@Serializable
+data class HistoryEntry(
+    val item: JellyfinItem,
+    val playedAtMs: Long
+)
+
+data class DownloadProgress(
+    val itemId: String,
+    val itemName: String = "",
+    val downloadedBytes: Long = 0L,
+    val totalBytes: Long = -1L,
+    val estimated: Boolean = false,
+    val qualityLabel: String = ""
+) {
+    val fraction: Float?
+        get() = if (totalBytes > 0L) {
+            (downloadedBytes.toDouble() / totalBytes.toDouble()).toFloat().coerceIn(0f, 1f)
+        } else {
+            null
+        }
 }
 
 enum class PlaybackEvent {
