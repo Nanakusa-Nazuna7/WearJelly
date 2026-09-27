@@ -2,7 +2,10 @@
 
 Standalone Jellyfin music player for Wear OS, including TicWatch Pro X devices without GMS. This project contains no Google Play services, Firebase, Play Billing, Wearable Play API or Google account integration.
 
-Development and installation instructions will be completed alongside verified release artifacts.
+## Requirements
+
+- Wear OS watch, Android 7.1.1 (API 25) or newer. The floor is set by Wear Compose 1.4; verified on TicWatch Pro X (Android 9, 454×454 round).
+- A Jellyfin 10.8+ server reachable over the network.
 
 ## Navigation flow
 
