@@ -19,7 +19,7 @@ graph TD
     Home -->|play history| History
     Home -->|settings| Settings
     Library -->|open album / artist songs| Library
-    Library -->|song detail (long-press)| Track
+    Library -->|long-press opens track detail| Track
     Library -->|tap song plays directly| Player
     Library -->|scope multi-select| ScopeActions
     Track -->|play| Player
