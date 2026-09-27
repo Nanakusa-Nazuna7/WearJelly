@@ -209,7 +209,6 @@ internal fun LoginScreen(viewModel: AppViewModel, loginUi: LoginUi) {
     val focusManager = LocalFocusManager.current
 
     ScalingLazyColumn(
-        scalingParams = EdgeScalingParams,
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
         state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -311,7 +310,6 @@ internal fun HomeScreen(viewModel: AppViewModel, account: AccountUi?) {
     val pbState by viewModel.playbackState.collectAsState()
 
     ScalingLazyColumn(
-        scalingParams = EdgeScalingParams,
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
         state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -479,8 +477,7 @@ internal fun LibraryScreen(viewModel: AppViewModel, screen: AppScreen.Library) {
         headerItems = headerItems
     ) { scaleModifier ->
         ScalingLazyColumn(
-            scalingParams = EdgeScalingParams,
-            modifier = scaleModifier.fillMaxSize().padding(start = 14.dp, end = 20.dp),
+                modifier = scaleModifier.fillMaxSize().padding(start = 14.dp, end = 20.dp),
             state = listState,
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -820,20 +817,6 @@ private fun AlphabetListScaffold(
 
 private const val RING_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ#"
 
-/**
- * 全局列表缩放（WearOS 6 参考）：中央两项保持最大，向上下边缘快速等比缩小。
- * transitionArea 收窄使衰减集中在中心附近，边缘元素明显更小。
- */
-private val EdgeScalingParams = androidx.wear.compose.foundation.lazy.ScalingLazyColumnDefaults.scalingParams(
-    edgeScale = 0.45f,
-    edgeAlpha = 0.75f,
-    minElementHeight = 20f,
-    maxElementHeight = 48f,
-    minTransitionArea = 4000f,
-    maxTransitionArea = 12000f,
-    viewportVerticalOffsetResolver = { constraints -> constraints.maxHeight / 2 },
-)
-
 /** 长文本末尾渐隐（非生硬省略号） */
 @Composable
 private fun FadingEdgeText(
@@ -983,7 +966,6 @@ internal fun ScopeActionsScreen(viewModel: AppViewModel, screen: AppScreen.Scope
     val listState = rememberScalingLazyListState()
 
     ScalingLazyColumn(
-        scalingParams = EdgeScalingParams,
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
         state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1045,7 +1027,6 @@ internal fun TrackDetailScreen(viewModel: AppViewModel, item: JellyfinItem, sour
     val isDownloaded = viewModel.isDownloaded(item.id)
 
     ScalingLazyColumn(
-        scalingParams = EdgeScalingParams,
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
         state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1198,7 +1179,6 @@ internal fun PlayerScreen(viewModel: AppViewModel) {
     val item = pbState.current
 
     ScalingLazyColumn(
-        scalingParams = EdgeScalingParams,
         modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp),
         state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1434,7 +1414,6 @@ internal fun QueueScreen(viewModel: AppViewModel) {
     val listState = rememberScalingLazyListState()
 
     ScalingLazyColumn(
-        scalingParams = EdgeScalingParams,
         modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp),
         state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1524,7 +1503,6 @@ internal fun LyricsScreen(viewModel: AppViewModel) {
     val lyrics = uiState.lyrics.lyrics
 
     ScalingLazyColumn(
-        scalingParams = EdgeScalingParams,
         modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
         state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1591,7 +1569,6 @@ internal fun DownloadsScreen(viewModel: AppViewModel) {
         headerItems = headerItems
     ) { scaleModifier ->
     ScalingLazyColumn(
-        scalingParams = EdgeScalingParams,
         modifier = scaleModifier.fillMaxSize().padding(start = 14.dp, end = 20.dp),
         state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1751,7 +1728,6 @@ internal fun HistoryScreen(viewModel: AppViewModel) {
         headerItems = 1
     ) { scaleModifier ->
     ScalingLazyColumn(
-        scalingParams = EdgeScalingParams,
         modifier = scaleModifier.fillMaxSize().padding(horizontal = 8.dp),
         state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1808,7 +1784,6 @@ internal fun SettingsScreen(viewModel: AppViewModel, account: AccountUi?) {
     val currentBitrate by viewModel.bitrate.collectAsState()
 
     ScalingLazyColumn(
-        scalingParams = EdgeScalingParams,
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
         state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
