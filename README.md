@@ -91,27 +91,24 @@ release 签名读取项目根目录的 `keystore.properties`（格式见 `keysto
 导航是 `AppViewModel` 中的自定义返回栈（`AppScreen` sealed interface）——没有使用导航库，因此 IDE 的导航图工具不适用于本项目。
 
 ```mermaid
-graph TD
-    Login -->|login success| Home
-    Home -->|artists / albums / all songs| Library
-    Home -->|my cache| Downloads
-    Home -->|play history| History
-    Home -->|settings| Settings
-    Library -->|open album / artist songs| Library
-    Library -->|long-press opens track detail| Track
-    Library -->|tap song plays directly| Player
-    Library -->|scope multi-select| ScopeActions
-    Track -->|play| Player
-    Player -->|queue| Queue
-    Player -->|lyrics| Lyrics
-    Downloads -->|tap plays| Player
-    Downloads -->|long-press| Track
-    History -->|tap plays| Player
-    History -->|long-press| Track
-    Settings -->|logout| Login
+flowchart LR
+    Login -->|登录成功| Home
+    Home -->|艺人 / 专辑 / 所有歌曲| Library
+    Home -->|已缓存音乐| Downloads
+    Home -->|播放历史| History
+    Home -->|设置| Settings
+    Library -->|点击| Player
+    Library -->|长按| Track
+    Track -->|播放| Player
+    Downloads -->|点击| Player
+    Downloads -->|长按| Track
+    History -->|点击| Player
+    History -->|长按| Track
+    Player -->|队列| Queue
+    Player -->|歌词| Lyrics
 ```
 
-`Queue`、`Lyrics`、`ScopeActions` 为叶子界面（只能返回），`Confirm` 界面统一处理破坏性操作的确认。
+列表可以逐级进入（艺人 / 专辑 → 歌曲列表），长按菜单里还能进入多选（`ScopeActions`）；`Queue`、`Lyrics`、`ScopeActions` 为叶子界面（只能返回），`Confirm` 统一处理破坏性操作的确认，设置页可退出登录或切换服务器回到登录界面。
 
 ## 已知限制
 
