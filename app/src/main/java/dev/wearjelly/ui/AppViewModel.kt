@@ -28,6 +28,8 @@ internal data class LibraryQuery(
     val artistId: String? = null,
 )
 
+internal enum class BatchSource { LIBRARY, DOWNLOADS, HISTORY, QUEUE }
+
 internal sealed interface AppScreen {
     data object Login : AppScreen
     data object Home : AppScreen
@@ -40,7 +42,11 @@ internal sealed interface AppScreen {
     data object Downloads : AppScreen
     data object History : AppScreen
     data class ScopeActions(val query: LibraryQuery, val title: String) : AppScreen
-    data class BatchActions(val query: LibraryQuery, val title: String) : AppScreen
+    data class BatchActions(
+        val query: LibraryQuery,
+        val title: String,
+        val source: BatchSource = BatchSource.LIBRARY,
+    ) : AppScreen
     data class ListActions(val query: LibraryQuery, val title: String) : AppScreen
     data class SongInfo(val item: JellyfinItem) : AppScreen
     data object Settings : AppScreen
@@ -376,6 +382,10 @@ class AppViewModel(
 
     internal fun playTrack(item: JellyfinItem) {
         if (repository.session.value == null) return
+        if (playback.state.value.current?.id == item.id) {
+            navigate(AppScreen.Player)
+            return
+        }
         android.util.Log.d("WJ", "playTrack ${item.name} connected=${playback.state.value.connected}")
         viewModelScope.launch {
             if (!waitForConnected()) {
@@ -396,10 +406,18 @@ class AppViewModel(
         return playback.state.value.connected
     }
 
-    internal fun playLoaded(query: LibraryQuery, itemId: String? = null) {
+    internal fun playLoaded(
+        query: LibraryQuery,
+        itemId: String? = null,
+        randomizedStart: Boolean = false,
+    ) {
         val items = mutableUi.value.libraries[query]?.items.orEmpty()
         if (query.kind != LibraryKind.SONGS || items.isEmpty()) return
-        val index = if (itemId == null) 0 else items.indexOfFirst { it.id == itemId }
+        val index = when {
+            itemId != null -> items.indexOfFirst { it.id == itemId }
+            randomizedStart -> kotlin.random.Random.nextInt(items.size)
+            else -> 0
+        }
         if (index < 0) {
             showNotice("歌曲列表已变化，请返回列表重试。")
             return
@@ -498,21 +516,41 @@ class AppViewModel(
     }
 
     internal fun selectAllIn(query: LibraryQuery) {
-        val orderedIds = mutableUi.value.libraries[query]?.items?.map { it.id } ?: return
+        val items = mutableUi.value.libraries[query]?.items.orEmpty()
+        selectAllItems(items)
+    }
+
+    internal fun selectAllItems(items: List<JellyfinItem>) {
+        val orderedIds = items.map { it.id }
         mutableUi.update { it.copy(selection = SelectionLogic.allSelected(it.selection, orderedIds)) }
     }
 
     internal fun invertSelectionIn(query: LibraryQuery) {
-        val orderedIds = mutableUi.value.libraries[query]?.items?.map { it.id } ?: return
+        val items = mutableUi.value.libraries[query]?.items.orEmpty()
+        invertSelectionItems(items)
+    }
+
+    internal fun invertSelectionItems(items: List<JellyfinItem>) {
+        val orderedIds = items.map { it.id }
         mutableUi.update { it.copy(selection = SelectionLogic.inverted(it.selection, orderedIds)) }
     }
 
-    /** 随机播放全部：确保随机模式开启后从列表头播放。 */
+    internal fun removeSelectedFromQueue(items: List<JellyfinItem>) {
+        val selectedIds = items.asSequence().map { it.id }.filter { it in mutableUi.value.selectedSongIds }.toSet()
+        val indices = playback.state.value.queue.mapIndexedNotNull { index, track ->
+            index.takeIf { track.item.id in selectedIds }
+        }.asReversed()
+        indices.forEach { index -> playbackAction { playback.removeQueueItem(index) } }
+        if (indices.isNotEmpty()) showNotice("已从队列移除 ${indices.size} 首")
+        exitSelectionMode()
+    }
+
+    /** 随机播放全部：确保随机模式开启后从列表内随机一首开始播放。 */
     internal fun playAllShuffled(query: LibraryQuery) {
         if (!playback.state.value.shuffleEnabled) {
             playbackAction { playback.toggleShuffle() }
         }
-        playLoaded(query, null)
+        playLoaded(query, randomizedStart = true)
     }
 
     internal fun batchAllSongsToQueue(query: LibraryQuery) {
@@ -597,6 +635,10 @@ class AppViewModel(
 
     internal fun playQueueIndex(index: Int, expectedId: String) {
         if (!queueMatches(index, expectedId)) return
+        if (index == playback.state.value.currentIndex && playback.state.value.current?.id == expectedId) {
+            navigate(AppScreen.Player)
+            return
+        }
         if (playbackAction { playback.playQueueIndex(index) }) navigate(AppScreen.Player)
     }
 

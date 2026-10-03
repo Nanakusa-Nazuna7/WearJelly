@@ -55,4 +55,10 @@ object PinyinSort {
 
     fun sort(items: List<JellyfinItem>): List<JellyfinItem> =
         items.sortedWith { a, b -> compareItems(a, b) }
+
+    /**
+     * 多选批量操作页「已下载」数据源（WV-003）：与下载页展示序同源，
+     * 保证批量操作列表与屏幕上排列一致。
+     */
+    fun downloadedBatchItems(items: List<JellyfinItem>): List<JellyfinItem> = sort(items)
 }

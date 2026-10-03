@@ -15,6 +15,7 @@ keystore.properties
 .env.*
 !.env.example
 credentials.properties
+.agent-teams/
 captures/
 .externalNativeBuild/
 .cxx/

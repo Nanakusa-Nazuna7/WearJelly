@@ -71,6 +71,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -121,6 +124,7 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 private val WearThemeColors = Colors(
     primary = Color(0xFF8CB4FF),
@@ -140,13 +144,21 @@ private val WearThemeColors = Colors(
 fun WearJellyApp(viewModel: AppViewModel) {
     MaterialTheme(colors = WearThemeColors) {
         val uiState by viewModel.uiState.collectAsState()
+        val stateHolder = rememberSaveableStateHolder()
         val isRootScreen = uiState.backStack.size <= 1
         BackHandler(enabled = !isRootScreen) {
             viewModel.goBack()
         }
         // 多选模式下返回键优先退出多选，不返回上一页（后注册的 enabled BackHandler 优先生效）；
         // 仅在列表页拦截，二级操作页仍走正常返回导航
-        BackHandler(enabled = uiState.selectionMode && uiState.screen is AppScreen.Library) {
+        BackHandler(
+            enabled = uiState.selectionMode && (
+                uiState.screen is AppScreen.Library ||
+                    uiState.screen == AppScreen.Downloads ||
+                    uiState.screen == AppScreen.History ||
+                    uiState.screen == AppScreen.Queue
+                )
+        ) {
             viewModel.exitSelectionMode()
         }
 
@@ -179,12 +191,13 @@ fun WearJellyApp(viewModel: AppViewModel) {
                         },
                         label = "screen"
                     ) { screen ->
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(Color.Black)
-                        ) {
-                            when (screen) {
+                        stateHolder.SaveableStateProvider(screen.toString()) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black)
+                            ) {
+                                when (screen) {
                         is AppScreen.Login -> LoginScreen(viewModel, uiState.login)
                         is AppScreen.Home -> HomeScreen(viewModel, uiState.account)
                         is AppScreen.Library -> LibraryScreen(viewModel, screen)
@@ -201,6 +214,7 @@ fun WearJellyApp(viewModel: AppViewModel) {
                         is AppScreen.SongInfo -> SongInfoScreen(screen.item)
                         is AppScreen.Settings -> SettingsScreen(viewModel, uiState.account)
                         is AppScreen.Confirm -> ConfirmScreen(viewModel, screen.action, screen.query)
+                            }
                             }
                         }
                     }
@@ -655,6 +669,7 @@ internal fun LibraryScreen(viewModel: AppViewModel, screen: AppScreen.Library) {
     val downloadProgress by viewModel.downloadProgress.collectAsState()
     val isSongsScreen = screen.query.kind == LibraryKind.SONGS
     val headerItems = 1 + (if (isSongsScreen) 1 else 0)
+    rememberSongListAnchor(listState, lib.items, headerItems)
 
     AlphabetListScaffold(
         items = lib.items,
@@ -672,7 +687,7 @@ internal fun LibraryScreen(viewModel: AppViewModel, screen: AppScreen.Library) {
     ) { scaleModifier ->
         ScalingLazyColumn(
             scalingParams = ListScalingParams,
-                modifier = scaleModifier.fillMaxSize().padding(start = 14.dp, end = 20.dp),
+                modifier = scaleModifier.fillMaxSize().padding(start = 14.dp, end = LIST_END_PADDING_DP.dp),
             state = listState,
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -781,9 +796,56 @@ internal fun LibraryScreen(viewModel: AppViewModel, screen: AppScreen.Library) {
         }
 }
 
+@Composable
+private fun rememberSongListAnchor(
+    listState: androidx.wear.compose.foundation.lazy.ScalingLazyListState,
+    items: List<JellyfinItem>,
+    headerItems: Int,
+    initialIndex: Int = 0,
+) {
+    var anchorId by rememberSaveable { mutableStateOf<String?>(null) }
+    var anchorIndex by rememberSaveable { mutableStateOf(0) }
+    var anchorOffset by rememberSaveable { mutableStateOf(0) }
+
+    LaunchedEffect(listState, items, headerItems, initialIndex) {
+        if (items.isEmpty()) return@LaunchedEffect
+        val index = resolveSongListAnchorIndex(anchorId, anchorIndex, initialIndex, items)
+        listState.scrollToItem(headerItems + index, anchorOffset)
+    }
+    LaunchedEffect(listState, items, headerItems) {
+        snapshotFlow {
+            (listState.centerItemIndex - headerItems) to listState.centerItemScrollOffset
+        }.collect { (index, offset) ->
+            if (index in items.indices) {
+                anchorIndex = index
+                anchorId = items[index].id
+                anchorOffset = offset
+            }
+        }
+    }
+}
+
 private fun firstLetterOf(name: String): String {
     val c = name.trim().uppercase().firstOrNull() ?: return "#"
     return if (c in 'A'..'Z') c.toString() else "#"
+}
+
+/**
+ * WV-005：列表锚点恢复目标索引（从 rememberSongListAnchor 抽出便于单测）：
+ * - 锚点 id 仍在列表中 → 用其最新位置（数据重排后不漂移）
+ * - 有 id 但已不在列表 → 回落保存的索引；从未有锚点 → 用初始索引
+ * - 最终夹在有效范围内（列表缩短也不越界）
+ */
+internal fun resolveSongListAnchorIndex(
+    anchorId: String?,
+    anchorIndex: Int,
+    initialIndex: Int,
+    items: List<JellyfinItem>,
+): Int {
+    val savedIndex = anchorId?.let { id -> items.indexOfFirst { it.id == id } }
+        ?.takeIf { it >= 0 }
+        ?: if (anchorId == null) initialIndex else anchorIndex
+    return savedIndex.coerceIn(items.indices)
 }
 
 /**
@@ -797,6 +859,7 @@ private fun AlphabetListScaffold(
     items: List<JellyfinItem>,
     listState: androidx.wear.compose.foundation.lazy.ScalingLazyListState,
     headerItems: Int,
+    showIndex: Boolean = true,
     overlay: (@Composable () -> Unit)? = null,
     list: @Composable (Modifier) -> Unit
 ) {
@@ -834,7 +897,7 @@ private fun AlphabetListScaffold(
             }
         }
 
-        if (items.isNotEmpty()) {
+        if (showIndex && items.isNotEmpty()) {
             BoxWithConstraints(Modifier.fillMaxSize()) {
                 val widthPx = constraints.maxWidth.toFloat()
                 val heightPx = constraints.maxHeight.toFloat()
@@ -871,20 +934,19 @@ private fun AlphabetListScaffold(
                     }
                 }
 
-                // 极简字母指示器：
-                // 闲置 —— 当前字母±1，大字、保持弧度，跟随滚动位置灵动滑动
-                // 使用 —— 当前字母±2 居中放大高亮，纵向均匀分布在右缘 3/4 高度
                 val centerItemIdx = listState.centerItemIndex - headerItems
                 val scrollLetterIdx = items.getOrNull(centerItemIdx)?.let {
-                    RING_LETTERS.indexOf(dev.wearjelly.data.PinyinSort.letterBucket(it.name))
+                    dev.wearjelly.data.PinyinSort.LETTERS.indexOf(
+                        dev.wearjelly.data.PinyinSort.letterBucket(it.name)
+                    )
                 } ?: -1
                 val shownLetterIdx = if (scrubbing) activeLetterIdx else scrollLetterIdx
-                val ringSpanF by animateFloatAsState(if (scrubbing) 2f else 1f)
+                // Active window shows the selected letter and up to three neighbors on either side.
+                val ringSpanF by animateFloatAsState(if (scrubbing) 3f else 1f)
                 val ringSpan = ringSpanF.toInt()
                 if (shownLetterIdx >= 0) {
-                    // 按角度布点：可见弧度明显，字形整体内收不裁边
                     val stepDeg = if (scrubbing) 8f else 11f
-                    for (role in -2..2) {
+                    for (role in -3..3) {
                         if (abs(role) > ringSpan.toInt()) continue
                         val letterIdx = shownLetterIdx + role
                         if (letterIdx !in RING_LETTERS.indices) continue
@@ -944,7 +1006,7 @@ private fun AlphabetListScaffold(
                 }
 
                 // 手势层：仅右缘窄条；竖向意图整段消费（允许手指弧线漂移），横向意图立即放行
-                val stripWidthDp = 26.dp
+                val stripWidthDp = INDEX_STRIP_WIDTH_DP.dp
                 val stripWidthPx = with(density) { stripWidthDp.toPx() }
                 val ringTop = ringY(0)
                 val ringBottom = ringY(RING_LETTERS.length - 1)
@@ -966,34 +1028,60 @@ private fun AlphabetListScaffold(
                         .pointerInput(items, isRound) {
                             awaitEachGesture {
                                 val down = awaitFirstDown(requireUnconsumed = false)
-                                var engaged = false
-                                var decided = false
-                                while (true) {
-                                    val event = awaitPointerEvent()
-                                    val change = event.changes.firstOrNull() ?: break
-                                    if (!decided) {
+                                var moved = false
+                                var released = false
+                                var horizontal = false
+                                var movedY = down.position.y
+                                val hold = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        val change = event.changes.firstOrNull() ?: break
+                                        if (!change.pressed) {
+                                            released = true
+                                            return@withTimeoutOrNull false
+                                        }
                                         val dx = change.position.x - down.position.x
                                         val dy = change.position.y - down.position.y
                                         if (dx * dx + dy * dy > viewConfiguration.touchSlop * viewConfiguration.touchSlop) {
-                                            decided = true
-                                            engaged = abs(dy) >= abs(dx) * 0.8f
-                                            if (engaged) {
-                                                scrubbing = true
-                                                jumpToLetter(nearestLetterIdx(change.position.y))
-                                            } else {
-                                                break // 横向：交还返回手势
-                                            }
+                                            moved = true
+                                            movedY = change.position.y
+                                            horizontal = abs(dx) > abs(dy) / 0.8f
+                                            return@withTimeoutOrNull false
                                         }
                                     }
-                                    if (engaged) {
-                                        change.consume()
-                                        jumpToLetter(nearestLetterIdx(change.position.y))
-                                    }
-                                    if (!event.changes.any { it.pressed }) break
+                                    false
                                 }
-                                if (!decided) {
+
+                                if (hold == null) {
                                     scrubbing = true
+                                    var selected = nearestLetterIdx(down.position.y)
+                                    activeLetterIdx = selected
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        val change = event.changes.firstOrNull() ?: break
+                                        if (change.pressed) {
+                                            selected = nearestLetterIdx(change.position.y)
+                                            activeLetterIdx = selected
+                                            change.consume()
+                                        } else {
+                                            break
+                                        }
+                                    }
+                                    jumpToLetter(selected)
+                                } else if (released && !moved) {
                                     jumpToLetter(nearestLetterIdx(down.position.y))
+                                } else if (moved && !horizontal) {
+                                    scrubbing = true
+                                    var selected = nearestLetterIdx(movedY)
+                                    jumpToLetter(selected)
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        val change = event.changes.firstOrNull() ?: break
+                                        if (!change.pressed) break
+                                        selected = nearestLetterIdx(change.position.y)
+                                        change.consume()
+                                        jumpToLetter(selected)
+                                    }
                                 }
                                 scrubbing = false
                             }
@@ -1005,6 +1093,10 @@ private fun AlphabetListScaffold(
 }
 
 private const val RING_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ#"
+
+// WV-002：列表右缘内边距必须 ≥ 索引条宽度，否则行可点击区伸进索引条下形成重叠带（曾为 20dp vs 26dp，重叠 6dp，带内点击可能同时触发跳转与行点击）
+internal const val INDEX_STRIP_WIDTH_DP = 26
+internal const val LIST_END_PADDING_DP = 26
 
 /** 长文本末尾渐隐（非生硬省略号） */
 @Composable
@@ -1084,6 +1176,7 @@ internal fun LibraryItemRow(
     isPlaying: Boolean = false,
     cached: Boolean = false,
     downloadProgressFraction: Float? = null,
+    trailingAction: (() -> Unit)? = null,
     onClick: () -> Unit,
     onLongClick: () -> Unit = {},
     onSwipeLeft: () -> Unit = {},
@@ -1160,6 +1253,14 @@ internal fun LibraryItemRow(
                         fadeColor = rowBg
                     )
                 }
+            }
+            if (!selectionMode && trailingAction != null) {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "移除",
+                    tint = Color.Gray,
+                    modifier = Modifier.size(24.dp).clickable(onClick = trailingAction)
+                )
             }
         }
     }
@@ -1262,7 +1363,15 @@ private fun MultiSelectBar(
 @Composable
 internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.BatchActions) {
     val uiState by viewModel.uiState.collectAsState()
-    val items = uiState.libraries[screen.query]?.items.orEmpty()
+    val downloaded by viewModel.downloadedSongs.collectAsState()
+    val history by viewModel.history.collectAsState()
+    val playbackState by viewModel.playbackState.collectAsState()
+    val items = when (screen.source) {
+        BatchSource.LIBRARY -> uiState.libraries[screen.query]?.items.orEmpty()
+        BatchSource.DOWNLOADS -> dev.wearjelly.data.PinyinSort.downloadedBatchItems(downloaded.map { it.item })
+        BatchSource.HISTORY -> history.map { it.item }
+        BatchSource.QUEUE -> playbackState.queue.map { it.item }
+    }
     val selectedItems = items.filter { it.id in uiState.selectedSongIds }
     val context = LocalContext.current
 
@@ -1340,17 +1449,33 @@ internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.Batch
                 Text(Copy.DELETE_SELECTED_CACHES, fontSize = 12.sp, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
-        item {
-            Button(
-                onClick = {
-                    viewModel.removeFromLibraryView(screen.query, uiState.selectedSongIds)
-                    viewModel.exitSelectionMode()
-                    viewModel.goBack()
-                },
-                modifier = Modifier.fillMaxWidth().height(40.dp),
-                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF4A5568))
-            ) {
-                Text(Copy.REMOVE_FROM_LIST, fontSize = 12.sp, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (screen.source == BatchSource.QUEUE) {
+            item {
+                Button(
+                    onClick = {
+                        viewModel.removeSelectedFromQueue(items)
+                        viewModel.goBack()
+                    },
+                    modifier = Modifier.fillMaxWidth().height(40.dp),
+                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF4A5568))
+                ) {
+                    Text("从队列移除", fontSize = 12.sp, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+        if (screen.source == BatchSource.LIBRARY) {
+            item {
+                Button(
+                    onClick = {
+                        viewModel.removeFromLibraryView(screen.query, uiState.selectedSongIds)
+                        viewModel.exitSelectionMode()
+                        viewModel.goBack()
+                    },
+                    modifier = Modifier.fillMaxWidth().height(40.dp),
+                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF4A5568))
+                ) {
+                    Text(Copy.REMOVE_FROM_LIST, fontSize = 12.sp, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
         }
         item {
@@ -1364,7 +1489,7 @@ internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.Batch
         }
         item {
             Button(
-                onClick = { viewModel.selectAllIn(screen.query) },
+                onClick = { viewModel.selectAllItems(items) },
                 modifier = Modifier.fillMaxWidth().height(40.dp),
                 colors = ButtonDefaults.secondaryButtonColors()
             ) {
@@ -1386,7 +1511,7 @@ internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.Batch
         item {
             Button(
                 onClick = {
-                    viewModel.invertSelectionIn(screen.query)
+                    viewModel.invertSelectionItems(items)
                     // 反选后为 0：自动退出多选并离开本页
                     if (!viewModel.uiState.value.selection.active) viewModel.goBack()
                 },
@@ -2022,14 +2147,20 @@ internal fun PlayerScreen(viewModel: AppViewModel) {
 internal fun QueueScreen(viewModel: AppViewModel) {
     val pbState by viewModel.playbackState.collectAsState()
     val cachedIds by viewModel.cachedTrackIds.collectAsState()
+    val uiState by viewModel.uiState.collectAsState()
+    val selectedIds = uiState.selectedSongIds
+    val selectionMode = uiState.selectionMode
     val listState = rememberScalingLazyListState()
+    val queueItems = remember(pbState.queue) { pbState.queue.map { it.item } }
+    rememberSongListAnchor(
+        listState,
+        queueItems,
+        headerItems = 2,
+        initialIndex = pbState.currentIndex.coerceAtLeast(0),
+    )
 
-    // 进入队列页时定位到当前曲目（REQ-PLAYBACK-102）
-    LaunchedEffect(pbState.currentIndex) {
-        if (pbState.currentIndex >= 0) listState.scrollToItem(2 + pbState.currentIndex)
-    }
-
-    ScalingLazyColumn(
+    Box(Modifier.fillMaxSize()) {
+        ScalingLazyColumn(
         scalingParams = ListScalingParams,
         modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp),
         state = listState,
@@ -2061,65 +2192,64 @@ internal fun QueueScreen(viewModel: AppViewModel) {
             }
         } else {
             itemsIndexed(pbState.queue) { index, track ->
-                val isCurrent = index == pbState.currentIndex
-                Button(
-                    onClick = { viewModel.playQueueIndex(index, track.item.id) },
-                    modifier = Modifier.fillMaxWidth().height(48.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        backgroundColor = if (isCurrent) Color(0xFF1E3A66) else MaterialTheme.colors.surface
-                    )
+                val item = track.item
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "${index + 1}.",
-                            fontSize = 11.sp,
-                            color = if (isCurrent) MaterialTheme.colors.primary else Color.Gray,
-                            modifier = Modifier.width(20.dp)
-                        )
-                        if (track.item.id in cachedIds) {
-                            Box(
-                                modifier = Modifier
-                                    .size(11.dp)
-                                    .background(Color(0xFF7BD88F), CircleShape),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                CachedTick()
+                    Text(
+                        text = "${index + 1}.",
+                        fontSize = 11.sp,
+                        color = if (index == pbState.currentIndex) MaterialTheme.colors.primary else Color.Gray,
+                        modifier = Modifier.width(24.dp)
+                    )
+                    LibraryItemRow(
+                        item = item,
+                        query = LibraryQuery(LibraryKind.SONGS),
+                        selected = item.id in selectedIds,
+                        selectionMode = selectionMode,
+                        isCurrent = item.id == pbState.current?.id,
+                        isPlaying = pbState.isPlaying,
+                        cached = item.id in cachedIds,
+                        trailingAction = { viewModel.removeQueueItem(index, item.id) },
+                        onClick = {
+                            if (selectionMode) viewModel.toggleSongSelection(item.id)
+                            else viewModel.playQueueIndex(index, item.id)
+                        },
+                        onLongClick = {
+                            if (!selectionMode) viewModel.openTrack(item, LibraryQuery(LibraryKind.SONGS))
+                        },
+                        onSwipeLeft = {
+                            if (selectionMode) {
+                                viewModel.selectRangeFromSwipe(item.id, pbState.queue.map { it.item.id })
+                            } else {
+                                viewModel.beginSelectionFromSwipe(item.id)
                             }
-                            Spacer(Modifier.width(4.dp))
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = track.item.name,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                fontSize = 12.sp,
-                                fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal
-                            )
-                            Text(
-                                text = track.item.artistText,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                fontSize = 10.sp,
-                                color = Color.Gray
-                            )
-                        }
-                        Icon(
-                            imageVector = Icons.Default.Delete,
-                            contentDescription = "移除",
-                            tint = Color.Gray,
-                            modifier = Modifier
-                                .size(24.dp)
-                                .clickable {
-                                    viewModel.removeQueueItem(index, track.item.id)
-                                }
-                        )
-                    }
+                        },
+                    )
                 }
             }
         }
+        if (selectionMode && pbState.queue.isNotEmpty()) {
+            item { Spacer(Modifier.height(56.dp)) }
+        }
+    }
+    if (selectionMode) {
+        MultiSelectBar(
+            selectedCount = selectedIds.size,
+            onExit = { viewModel.exitSelectionMode() },
+            onMore = {
+                viewModel.navigate(
+                    AppScreen.BatchActions(
+                        LibraryQuery(LibraryKind.SONGS),
+                        "播放队列",
+                        BatchSource.QUEUE,
+                    )
+                )
+            },
+            modifier = Modifier.align(Alignment.BottomCenter)
+        )
+    }
     }
 }
 
@@ -2130,26 +2260,48 @@ internal fun DownloadsScreen(viewModel: AppViewModel) {
     val downloaded by viewModel.downloadedSongs.collectAsState()
     val pbState by viewModel.playbackState.collectAsState()
     val queue by viewModel.downloadQueue.collectAsState()
+    val uiState by viewModel.uiState.collectAsState()
+    val selectedIds = uiState.selectedSongIds
+    val selectionMode = uiState.selectionMode
+    val cachedIds by viewModel.cachedTrackIds.collectAsState()
+    val downloadingIds by viewModel.downloadingIds.collectAsState()
+    val downloadProgress by viewModel.downloadProgress.collectAsState()
     var sectionExpanded by remember { mutableStateOf(true) }
 
-    val sortedDownloaded = remember(downloaded, viewModel.history) {
-        val history = viewModel.history.value
-        downloaded.sortedByDescending { song ->
-            val playedAt = history.firstOrNull { it.item.id == song.item.id }?.playedAtMs ?: 0L
-            if (playedAt > 0L) playedAt else song.downloadedTimeMs
-        }
+    val sortedDownloaded = remember(downloaded) {
+        val byId = downloaded.associateBy { it.item.id }
+        dev.wearjelly.data.PinyinSort.sort(downloaded.map { it.item }).mapNotNull { byId[it.id] }
     }
 
     val headerItems = 1 + (if (queue.isNotEmpty()) 1 else 0) + (if (queue.isNotEmpty() && sectionExpanded) queue.size else 0)
+    val downloadedItems = remember(sortedDownloaded) { sortedDownloaded.map { it.item } }
+    rememberSongListAnchor(listState, downloadedItems, headerItems)
 
     AlphabetListScaffold(
-        items = sortedDownloaded.map { it.item },
+        items = downloadedItems,
         listState = listState,
-        headerItems = headerItems
+        headerItems = headerItems,
+        overlay = {
+            if (selectionMode) {
+                MultiSelectBar(
+                    selectedCount = selectedIds.size,
+                    onExit = { viewModel.exitSelectionMode() },
+                    onMore = {
+                        viewModel.navigate(
+                            AppScreen.BatchActions(
+                                LibraryQuery(LibraryKind.DOWNLOADS),
+                                "已缓存音乐",
+                                BatchSource.DOWNLOADS,
+                            )
+                        )
+                    }
+                )
+            }
+        }
     ) { scaleModifier ->
     ScalingLazyColumn(
         scalingParams = ListScalingParams,
-        modifier = scaleModifier.fillMaxSize().padding(start = 14.dp, end = 20.dp),
+        modifier = scaleModifier.fillMaxSize().padding(start = 14.dp, end = LIST_END_PADDING_DP.dp),
         state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -2258,38 +2410,35 @@ internal fun DownloadsScreen(viewModel: AppViewModel) {
         if (sortedDownloaded.isEmpty()) {
             item { Text("暂无已缓存歌曲", color = Color.Gray, fontSize = 12.sp) }
         } else {
-            itemsIndexed(sortedDownloaded) { _, downloadedSong ->
+            itemsIndexed(sortedDownloaded) { index, downloadedSong ->
                 val item = downloadedSong.item
-                val rowBg = if (pbState.current?.id == item.id) Color(0xFF123B63) else MaterialTheme.colors.surface
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp)
-                        .clip(RoundedCornerShape(percent = 50))
-                        .background(rowBg)
-                        .combinedClickable(
-                            onClick = { viewModel.playTrack(item) },
-                            onLongClick = { viewModel.openTrack(item, LibraryQuery(LibraryKind.DOWNLOADS)) }
-                        )
-                        .padding(horizontal = 16.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxSize()) {
-                        if (pbState.current?.id == item.id) {
-                            EqualizerBars(playing = pbState.isPlaying, color = MaterialTheme.colors.primary)
+                LibraryItemRow(
+                    item = item,
+                    query = LibraryQuery(LibraryKind.DOWNLOADS),
+                    selected = item.id in selectedIds,
+                    selectionMode = selectionMode,
+                    isCurrent = pbState.current?.id == item.id,
+                    isPlaying = pbState.isPlaying,
+                    cached = item.id in cachedIds,
+                    downloadProgressFraction = if (item.id in downloadingIds) downloadProgress[item.id]?.fraction else null,
+                    onClick = {
+                        if (selectionMode) viewModel.toggleSongSelection(item.id) else viewModel.playTrack(item)
+                    },
+                    onLongClick = {
+                        if (!selectionMode) viewModel.openTrack(item, LibraryQuery(LibraryKind.DOWNLOADS))
+                    },
+                    onSwipeLeft = {
+                        if (selectionMode) {
+                            viewModel.selectRangeFromSwipe(item.id, sortedDownloaded.map { it.item.id })
                         } else {
-                            Icon(Icons.Default.MusicNote, contentDescription = null, tint = MaterialTheme.colors.primary)
+                            viewModel.beginSelectionFromSwipe(item.id)
                         }
-                        Spacer(Modifier.width(10.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            FadingEdgeText(item.name, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White, fadeColor = rowBg)
-                            FadingEdgeText(
-                                "${item.artistText} · ${downloadedSong.qualityLabel}",
-                                fontSize = 9.sp, color = Color(0xFF8A93A5), fadeColor = rowBg
-                            )
-                        }
-                    }
-                }
+                    },
+                )
             }
+        }
+        if (selectionMode && sortedDownloaded.isNotEmpty()) {
+            item { Spacer(Modifier.height(56.dp)) }
         }
     }
     }
@@ -2301,11 +2450,35 @@ internal fun HistoryScreen(viewModel: AppViewModel) {
     val listState = rememberScalingLazyListState()
     val history by viewModel.history.collectAsState()
     val pbState by viewModel.playbackState.collectAsState()
+    val uiState by viewModel.uiState.collectAsState()
+    val selectedIds = uiState.selectedSongIds
+    val selectionMode = uiState.selectionMode
+    val cachedIds by viewModel.cachedTrackIds.collectAsState()
+    val historyItems = remember(history) { history.map { it.item } }
+    rememberSongListAnchor(listState, historyItems, headerItems = 1)
 
     AlphabetListScaffold(
-        items = history.map { it.item },
+        items = historyItems,
         listState = listState,
-        headerItems = 1
+        headerItems = 1,
+        showIndex = false,
+        overlay = {
+            if (selectionMode) {
+                MultiSelectBar(
+                    selectedCount = selectedIds.size,
+                    onExit = { viewModel.exitSelectionMode() },
+                    onMore = {
+                        viewModel.navigate(
+                            AppScreen.BatchActions(
+                                LibraryQuery(LibraryKind.SONGS),
+                                "播放历史",
+                                BatchSource.HISTORY,
+                            )
+                        )
+                    }
+                )
+            }
+        }
     ) { scaleModifier ->
     ScalingLazyColumn(
         scalingParams = ListScalingParams,
@@ -2325,35 +2498,34 @@ internal fun HistoryScreen(viewModel: AppViewModel) {
         if (history.isEmpty()) {
             item { Text("暂无播放记录", color = Color.Gray, fontSize = 12.sp) }
         } else {
-            itemsIndexed(history) { _, entry ->
+            itemsIndexed(history) { index, entry ->
                 val item = entry.item
-                val rowBg = if (pbState.current?.id == item.id) Color(0xFF123B63) else MaterialTheme.colors.surface
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp)
-                        .clip(RoundedCornerShape(percent = 50))
-                        .background(rowBg)
-                        .combinedClickable(
-                            onClick = { viewModel.playTrack(item) },
-                            onLongClick = { viewModel.openTrack(item, LibraryQuery(LibraryKind.DOWNLOADS)) }
-                        )
-                        .padding(horizontal = 16.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxSize()) {
-                        if (pbState.current?.id == item.id) {
-                            EqualizerBars(playing = pbState.isPlaying, color = MaterialTheme.colors.primary)
+                LibraryItemRow(
+                    item = item,
+                    query = LibraryQuery(LibraryKind.SONGS),
+                    selected = item.id in selectedIds,
+                    selectionMode = selectionMode,
+                    isCurrent = pbState.current?.id == item.id,
+                    isPlaying = pbState.isPlaying,
+                    cached = item.id in cachedIds,
+                    onClick = {
+                        if (selectionMode) viewModel.toggleSongSelection(item.id) else viewModel.playTrack(item)
+                    },
+                    onLongClick = {
+                        if (!selectionMode) viewModel.openTrack(item, LibraryQuery(LibraryKind.SONGS))
+                    },
+                    onSwipeLeft = {
+                        if (selectionMode) {
+                            viewModel.selectRangeFromSwipe(item.id, historyItems.map { it.id })
                         } else {
-                            Icon(Icons.Default.MusicNote, contentDescription = null, tint = MaterialTheme.colors.primary)
+                            viewModel.beginSelectionFromSwipe(item.id)
                         }
-                        Spacer(Modifier.width(10.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            FadingEdgeText(item.name, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White, fadeColor = rowBg)
-                            FadingEdgeText(item.artistText, fontSize = 9.sp, color = Color(0xFF8A93A5), fadeColor = rowBg)
-                        }
-                    }
-                }
+                    },
+                )
             }
+        }
+        if (selectionMode && history.isNotEmpty()) {
+            item { Spacer(Modifier.height(56.dp)) }
         }
     }
     }

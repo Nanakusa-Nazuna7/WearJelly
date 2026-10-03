@@ -13,6 +13,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.ShuffleOrder.DefaultShuffleOrder
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.session.SessionCommand
@@ -51,6 +52,7 @@ class PlaybackService : MediaSessionService() {
     private var progressReportJob: Job? = null
     private var currentPlayingItemId: String? = null
     private var lastPlaybackPersistAt = 0L
+    private val playHistory = PlayHistoryStack()
 
     companion object {
         const val CUSTOM_COMMAND_SET_QUEUE = "dev.wearjelly.SET_QUEUE"
@@ -60,6 +62,7 @@ class PlaybackService : MediaSessionService() {
         const val CUSTOM_COMMAND_REMOVE_AT = "dev.wearjelly.REMOVE_AT"
         const val CUSTOM_COMMAND_MOVE_ITEM = "dev.wearjelly.MOVE_ITEM"
         const val CUSTOM_COMMAND_CLEAR_QUEUE = "dev.wearjelly.CLEAR_QUEUE"
+        const val CUSTOM_COMMAND_PREVIOUS_HISTORY = "dev.wearjelly.PREVIOUS_HISTORY"
 
         const val EXTRA_ITEMS_JSON = "extra_items_json"
         const val EXTRA_START_INDEX = "extra_start_index"
@@ -113,11 +116,27 @@ class PlaybackService : MediaSessionService() {
                     .add(SessionCommand(CUSTOM_COMMAND_REMOVE_AT, Bundle.EMPTY))
                     .add(SessionCommand(CUSTOM_COMMAND_MOVE_ITEM, Bundle.EMPTY))
                     .add(SessionCommand(CUSTOM_COMMAND_CLEAR_QUEUE, Bundle.EMPTY))
+                    .add(SessionCommand(CUSTOM_COMMAND_PREVIOUS_HISTORY, Bundle.EMPTY))
                     .build()
                 return MediaSession.ConnectionResult.accept(
                     commands,
                     MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS
                 )
+            }
+
+            // WV-008：随机模式下外部控制器的「上一首」转内部历史回退，阻断原生 no-op 路径
+            @Suppress("DEPRECATION")
+            override fun onPlayerCommandRequest(
+                session: MediaSession,
+                controller: MediaSession.ControllerInfo,
+                playerCommand: Int
+            ): Int {
+                if (shouldRouteExternalPreviousToHistory(playerCommand, session.player.shuffleModeEnabled)) {
+                    handlePrevious()
+                    // 拒绝随后的原生执行（MediaSessionLegacyStub/MediaSessionStub 在非 SUCCESS 时跳过命令）
+                    return SessionResult.RESULT_ERROR_PERMISSION_DENIED
+                }
+                return SessionResult.RESULT_SUCCESS
             }
 
             override fun onCustomCommand(
@@ -181,6 +200,8 @@ class PlaybackService : MediaSessionService() {
                     CUSTOM_COMMAND_REMOVE_AT -> {
                         val index = args.getInt(EXTRA_INDEX, -1)
                         if (index in 0 until (player?.mediaItemCount ?: 0)) {
+                            // WV-009：队列移除同步清掉随机历史，避免「上一首」回退到已删曲目
+                            player?.getMediaItemAt(index)?.mediaId?.let { playHistory.remove(it) }
                             player?.removeMediaItem(index)
                         }
                     }
@@ -194,9 +215,11 @@ class PlaybackService : MediaSessionService() {
                     }
                     CUSTOM_COMMAND_CLEAR_QUEUE -> {
                         player?.clearMediaItems()
+                        playHistory.clear()
                         stopProgressReporting()
                         lastPlaybackStore.clear()
                     }
+                    CUSTOM_COMMAND_PREVIOUS_HISTORY -> handlePrevious()
                 }
                 return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
             }
@@ -241,6 +264,17 @@ class PlaybackService : MediaSessionService() {
                     recordHistory(newId)
                     reportEvent(PlaybackEvent.START)
                 }
+                // 随机模式下每进入新曲目即开启新一轮随机：避开最近播放的曲目
+                if (player?.shuffleModeEnabled == true) {
+                    regenerateShuffleOrder()
+                }
+            }
+
+            override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
+                // 打开随机时立刻按播放历史生成顺序，当前曲目保持不变
+                if (shuffleModeEnabled) {
+                    regenerateShuffleOrder()
+                }
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -255,6 +289,12 @@ class PlaybackService : MediaSessionService() {
                 stopProgressReporting()
             }
         })
+
+        // WV-011：restoreLastPlayback 在监听注册前恢复 shuffleModeEnabled，不会触发
+        // onShuffleModeEnabledChanged；冷启动随机开启时在此补生成一次随机序（当前曲目固定首位）
+        if (exo.shuffleModeEnabled) {
+            regenerateShuffleOrder()
+        }
     }
 
     private fun handleSetQueue(items: List<JellyfinItem>, startIndex: Int) {
@@ -297,12 +337,57 @@ class PlaybackService : MediaSessionService() {
     private fun recordHistory(itemId: String) {
         val exo = player ?: return
         val raw = exo.currentMediaItem?.mediaMetadata?.extras?.getString("jellyfin_item_json")
-        if (raw.isNullOrBlank()) return
-        try {
-            historyStore.record(json.decodeFromString<JellyfinItem>(raw))
-        } catch (e: Exception) {
-            e.printStackTrace()
+        if (!raw.isNullOrBlank()) {
+            try {
+                historyStore.record(json.decodeFromString<JellyfinItem>(raw))
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
+        // WV-010：extras 缺失/解析失败也记随机历史，否则随机避让与「上一首」历史静默失效
+        playHistory.record(itemId)
+    }
+
+    /**
+     * 生成新的随机播放顺序：timeline（原队列顺序）不变，仅替换 ShuffleOrder。
+     * 当前曲目固定在新顺序首位，最近播放的五首尽量排到本轮末尾。
+     */
+    private fun regenerateShuffleOrder() {
+        val exo = player ?: return
+        val count = exo.mediaItemCount
+        if (count <= 1) return
+        val order = ShuffleQueue.generateOrder(
+            size = count,
+            currentIndex = exo.currentMediaItemIndex,
+            recentTrackIds = playHistory.recent(ShuffleQueue.RECENTLY_PLAYED_AVOID_COUNT),
+            trackIdAt = { i -> exo.getMediaItemAt(i).mediaId }
+        )
+        exo.setShuffleOrder(DefaultShuffleOrder(order, System.nanoTime()))
+    }
+
+    /** 上一首：随机模式下沿实际播放历史回退；否则保持原地重启/顺序回退的默认行为。 */
+    private fun handlePrevious() {
+        val exo = player ?: return
+        if (exo.shuffleModeEnabled) {
+            var previousIndex = -1
+            val previousId = playHistory.goToPrevious { trackId ->
+                previousIndex = (0 until exo.mediaItemCount).firstOrNull {
+                    exo.getMediaItemAt(it).mediaId == trackId
+                } ?: -1
+                previousIndex >= 0
+            }
+            if (previousId != null) {
+                exo.seekTo(previousIndex, 0L)
+                exo.play()
+                return
+            }
+        }
+        if (exo.currentPosition > 3_000L) {
+            exo.seekTo(0L)
+        } else {
+            exo.seekToPreviousMediaItem()
+        }
+        exo.play()
     }
 
     /**
@@ -430,3 +515,13 @@ class PlaybackService : MediaSessionService() {
         super.onDestroy()
     }
 }
+
+/**
+ * WV-008：外部控制器（蓝牙/通知栏/系统媒体键）的「上一首」是否转内部历史回退。
+ * 随机开启时原生 seekToPrevious/seekToPreviousMediaItem 因「当前曲目固定 ShuffleOrder 首位」
+ * 是 no-op，必须转 handlePrevious()；非随机时保持原生行为不变。
+ */
+internal fun shouldRouteExternalPreviousToHistory(playerCommand: Int, shuffleEnabled: Boolean): Boolean =
+    shuffleEnabled &&
+        (playerCommand == Player.COMMAND_SEEK_TO_PREVIOUS ||
+            playerCommand == Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)

@@ -255,13 +255,12 @@ class PlaybackConnection(
     }
 
     fun previous() {
-        controller?.let {
-            if (it.currentPosition > 3000L) {
-                it.seekTo(0L)
-            } else {
-                it.seekToPreviousMediaItem()
-            }
-        }
+        val c = controller ?: return
+        // 由服务端裁决：随机模式下沿实际播放历史回退；否则重启当前曲目或顺序回退
+        c.sendCustomCommand(
+            SessionCommand(PlaybackService.CUSTOM_COMMAND_PREVIOUS_HISTORY, Bundle.EMPTY),
+            Bundle.EMPTY
+        )
     }
 
     fun seekTo(positionMs: Long) {
