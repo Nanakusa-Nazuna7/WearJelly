@@ -79,6 +79,7 @@ interface PlaylistDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(playlists: List<PlaylistEntity>)
 
+<<<<<<< HEAD
     @Query("UPDATE PlaylistEntity SET lastSyncedMs = :syncedAt WHERE serverKey = :serverKey AND itemId = :playlistId")
     suspend fun markSynced(serverKey: String, playlistId: String, syncedAt: Long)
 
@@ -87,6 +88,10 @@ interface PlaylistDao {
 
     @Query("DELETE FROM PlaylistEntity WHERE serverKey = :serverKey")
     suspend fun deleteAll(serverKey: String)
+=======
+    @Query("SELECT * FROM PlaylistEntity WHERE serverKey = :serverKey ORDER BY name COLLATE NOCASE")
+    suspend fun all(serverKey: String): List<PlaylistEntity>
+>>>>>>> aceddd7 (feat: add offline library database)
 }
 
 @Dao
@@ -100,9 +105,12 @@ interface PlaylistTrackDao {
     @Query("SELECT * FROM PlaylistTrackEntity WHERE serverKey = :serverKey AND playlistId = :playlistId ORDER BY orderIndex")
     suspend fun tracksInOrder(serverKey: String, playlistId: String): List<PlaylistTrackEntity>
 
+<<<<<<< HEAD
     @Query("DELETE FROM PlaylistTrackEntity WHERE serverKey = :serverKey")
     suspend fun deleteAll(serverKey: String)
 
+=======
+>>>>>>> aceddd7 (feat: add offline library database)
     @Transaction
     suspend fun replaceSnapshot(serverKey: String, playlistId: String, trackIdsInOrder: List<String>) {
         deleteForPlaylist(serverKey, playlistId)
@@ -140,12 +148,15 @@ interface DownloadTaskDao {
 
     @Query("UPDATE DownloadTaskEntity SET status = 'WAITING' WHERE serverKey = :serverKey AND status = 'RUNNING'")
     suspend fun recoverRunning(serverKey: String): Int
+<<<<<<< HEAD
 
     @Query("UPDATE DownloadTaskEntity SET downloadedBytes = :downloadedBytes, totalBytes = :totalBytes, updatedAtMs = :updatedAtMs WHERE serverKey = :serverKey AND taskId = :taskId")
     suspend fun updateProgress(serverKey: String, taskId: String, downloadedBytes: Long, totalBytes: Long, updatedAtMs: Long)
 
     @Query("UPDATE DownloadTaskEntity SET status = :status, failureReason = :failureReason, downloadedBytes = :downloadedBytes, totalBytes = :totalBytes, updatedAtMs = :updatedAtMs WHERE serverKey = :serverKey AND taskId = :taskId")
     suspend fun updateStatus(serverKey: String, taskId: String, status: String, failureReason: String?, downloadedBytes: Long, totalBytes: Long, updatedAtMs: Long)
+=======
+>>>>>>> aceddd7 (feat: add offline library database)
 }
 
 fun JellyfinItem.toTrackEntity(serverKey: String): TrackEntity = TrackEntity(

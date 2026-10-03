@@ -27,6 +27,7 @@ class OfflineConverters {
     @TypeConverter
     fun jsonToStringMap(value: String?): Map<String, String>? = value?.let { json.decodeFromString(it) }
 }
+<<<<<<< HEAD
 
 /**
  * 本地快照的作用域键：同一台服务器下的不同账号各自拥有独立曲库快照。
@@ -34,3 +35,5 @@ class OfflineConverters {
  */
 fun offlineServerKey(serverUrl: String, userId: String): String =
     "${dev.wearjelly.data.normalizeServerUrl(serverUrl)}|$userId"
+=======
+>>>>>>> aceddd7 (feat: add offline library database)

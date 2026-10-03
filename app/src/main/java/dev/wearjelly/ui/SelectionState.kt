@@ -36,7 +36,7 @@ internal object SelectionLogic {
     }
 
     /**
-     * 多选模式左滑条目：范围选择 [target..anchor]（按 orderedIds 的列表序），
+     * 多选模式左滑条目：范围选择 `target..anchor`（按 orderedIds 的列表序），
      * 锚点更新为本次左滑的终点 target。锚点为空或已不在列表中时退化为单选 target。
      */
     fun rangeSelected(
