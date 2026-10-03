@@ -9,6 +9,8 @@ import dev.wearjelly.data.LibraryKind
 import dev.wearjelly.data.ServerSession
 import dev.wearjelly.data.SongLyrics
 import dev.wearjelly.data.normalizeServerUrl
+import dev.wearjelly.data.offline.OfflineLibraryReader
+import dev.wearjelly.data.offline.SyncState
 import dev.wearjelly.playback.PlaybackConnection
 import dev.wearjelly.playback.PlaybackState
 import java.io.IOException
@@ -111,6 +113,8 @@ class AppViewModel(
     val historyStore: dev.wearjelly.data.HistoryStore,
     private val lastPlaybackStore: dev.wearjelly.data.LastPlaybackStore,
     private val lyricsPrefs: dev.wearjelly.data.LyricsPrefs,
+    private val offlineReader: OfflineLibraryReader,
+    private val offlineSync: dev.wearjelly.data.offline.OfflineSyncCoordinator,
 ) : ViewModel() {
     val session: StateFlow<ServerSession?> = repository.session
     val playbackState: StateFlow<PlaybackState> = playback.state
@@ -122,6 +126,8 @@ class AppViewModel(
     val history: StateFlow<List<dev.wearjelly.data.HistoryEntry>> = historyStore.entries
     val lastPlayback: StateFlow<dev.wearjelly.data.LastPlayback?> = lastPlaybackStore.lastPlayback
     val cachedTrackIds: StateFlow<Set<String>> = downloadManager.cachedTrackIds
+    val offlineSyncState: StateFlow<SyncState> = offlineSync.state
+    private var offlineMode = false
     private val mutableUi = MutableStateFlow(AppUiState())
     internal val uiState = mutableUi.asStateFlow()
 
@@ -134,6 +140,12 @@ class AppViewModel(
 
     init {
         acceptSession(repository.session.value, initial = true)
+        viewModelScope.launch {
+            if (repository.session.value == null && offlineReader.hasSnapshot()) {
+                offlineMode = true
+                mutableUi.update { it.copy(backStack = listOf(AppScreen.Home), login = it.login.copy(error = null)) }
+            }
+        }
         viewModelScope.launch {
             repository.session.collect { value ->
                 if (value != observedSession) acceptSession(value)
@@ -151,6 +163,7 @@ class AppViewModel(
     private fun acceptSession(value: ServerSession?, initial: Boolean = false) {
         val previous = observedSession
         observedSession = value
+        offlineMode = value == null && offlineMode
         generation += 1
         loginJob?.cancel()
         libraryJobs.values.forEach(Job::cancel)
@@ -262,7 +275,7 @@ class AppViewModel(
     }
 
     internal fun navigate(screen: AppScreen) {
-        if (repository.session.value == null && screen != AppScreen.Login) return
+        if (repository.session.value == null && !offlineMode && screen != AppScreen.Login) return
         val stack = mutableUi.value.backStack
         if (stack.last() == screen) return
         val existing = stack.indexOfLast { it == screen }
@@ -312,7 +325,7 @@ class AppViewModel(
     }
 
     private fun loadLibrary(query: LibraryQuery, fromStart: Boolean) {
-        if (repository.session.value == null) return
+        if (repository.session.value == null && !offlineMode) return
         if (query.kind == LibraryKind.DOWNLOADS) return
         val old = mutableUi.value.libraries[query] ?: LibraryUi()
         if (old.loading && !fromStart) return
@@ -321,6 +334,24 @@ class AppViewModel(
         updateLibrary(query) { copy(loading = true, error = null, retryFromStart = fromStart) }
         libraryJobs[query] = viewModelScope.launch {
             try {
+                if (offlineMode) {
+                    val offset = if (fromStart) 0 else old.nextOffset
+                    val page = offlineReader.page(
+                        query.kind,
+                        query.playlistId,
+                        query.parentId,
+                        query.artistId,
+                        offset,
+                        PAGE_SIZE
+                    )
+                    val items = if (fromStart) page.items else old.items + page.items
+                    updateLibrary(query) {
+                        copy(items = items, total = page.totalRecordCount, nextOffset = items.size,
+                            loading = false, loaded = true, endReached = items.size >= page.totalRecordCount,
+                            error = null)
+                    }
+                    return@launch
+                }
                 // 全量拉取后按英文/拼音首字母 A-Z# 本地排序，保证字母条顺序正确
                 val all = mutableListOf<JellyfinItem>()
                 var offset = if (fromStart) 0 else old.nextOffset
@@ -396,7 +427,11 @@ class AppViewModel(
     }
 
     internal fun playTrack(item: JellyfinItem) {
-        if (repository.session.value == null) return
+        if (repository.session.value == null && !offlineMode) return
+        if (offlineMode && !downloadManager.isDownloaded(item.id)) {
+            showNotice("该歌曲尚未缓存，连接服务器后可播放。")
+            return
+        }
         if (playback.state.value.current?.id == item.id) {
             navigate(AppScreen.Player)
             return

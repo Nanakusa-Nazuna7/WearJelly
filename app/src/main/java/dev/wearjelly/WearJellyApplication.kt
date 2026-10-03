@@ -48,17 +48,18 @@ class WearJellyApplication : Application(), ImageLoaderFactory, KoinComponent {
                 }
                 single { SessionStore(androidContext(), get()) }
                 single { JellyfinRepository(get(), get(), get()) }
-                single { dev.wearjelly.data.DownloadManager(androidContext(), get(), get(), get()) }
+                single { dev.wearjelly.data.DownloadManager(androidContext(), get(), get(), get(), get()) }
                 single { dev.wearjelly.data.HistoryStore(androidContext(), get()) }
                 single { dev.wearjelly.data.LastPlaybackStore(androidContext(), get()) }
                 single { dev.wearjelly.data.LyricsPrefs(androidContext(), get()) }
                 single { PlaybackConnection(androidContext(), get(), get()) }
                 single { dev.wearjelly.data.offline.OfflineDatabase.get(androidContext()) }
                 single { dev.wearjelly.data.offline.OfflineLibrarySync(get(), get()) }
+                 single { dev.wearjelly.data.offline.OfflineLibraryReader(get()) }
                 single {
                     dev.wearjelly.data.offline.OfflineSyncCoordinator(get(), get(), offlineSyncScope)
                 }
-                viewModel { AppViewModel(get(), get(), get(), get(), get(), get()) }
+                viewModel { AppViewModel(get(), get(), get(), get(), get(), get(), get(), get()) }
             })
         }
         // Koin single 是懒创建：立即解析协调器，让已保存的会话（冷启动）也能自动同步

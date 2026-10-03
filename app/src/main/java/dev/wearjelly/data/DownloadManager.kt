@@ -1,6 +1,9 @@
 package dev.wearjelly.data
 
 import android.content.Context
+import androidx.room.withTransaction
+import dev.wearjelly.data.offline.OfflineDatabase
+import dev.wearjelly.data.offline.offlineServerKey
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
@@ -38,7 +41,8 @@ class DownloadManager(
     private val context: Context,
     private val client: OkHttpClient,
     private val repository: JellyfinRepository,
-    private val json: Json
+    private val json: Json,
+    private val database: OfflineDatabase
 ) {
     private val _downloads = MutableStateFlow<List<DownloadedSong>>(emptyList())
     val downloads: StateFlow<List<DownloadedSong>> = _downloads.asStateFlow()
@@ -68,6 +72,35 @@ class DownloadManager(
 
     init {
         loadIndex()
+        workerScope.launch { restorePersistentQueue() }
+    }
+
+    private fun currentServerKey(): String? = repository.session.value?.let {
+        offlineServerKey(it.serverUrl, it.userId)
+    }
+
+    private suspend fun restorePersistentQueue() {
+        val serverKey = currentServerKey() ?: return
+        database.downloadTasks().recoverRunning(serverKey)
+        val tasks = database.downloadTasks().all(serverKey)
+        val restored = tasks.filter { it.status == "WAITING" || it.status == "RUNNING" }
+            .mapNotNull { task ->
+                runCatching { json.decodeFromString<JellyfinItem>(task.itemJson) }.getOrNull()?.let { item ->
+                    QueueEntry(item.id, item.name, item.artistText, DownloadStatus.WAITING, task.downloadedBytes, task.totalBytes, qualityLabel = task.qualityLabel.orEmpty())
+                }
+            }
+        if (restored.isNotEmpty()) {
+            _queue.value = (_queue.value + restored).distinctBy { it.itemId }
+            startWorker()
+        }
+        tasks.filter { it.status == "DONE" }.forEach { task ->
+            val track = database.tracks().get(serverKey, task.itemId)
+            val audio = track?.localAudioPath?.let(::File)
+            if (track != null && audio?.exists() == true && _downloads.value.none { it.item.id == track.itemId }) {
+                val item = runCatching { json.decodeFromString<JellyfinItem>(track.metadataJson) }.getOrNull() ?: return@forEach
+                _downloads.value = _downloads.value + DownloadedSong(item, audio.absolutePath, track.localCoverPath, track.downloadedTimeMs ?: System.currentTimeMillis(), track.qualityLabel ?: "未知音质")
+            }
+        }
     }
 
     private fun loadIndex() {
@@ -123,6 +156,22 @@ class DownloadManager(
             )
         }
         _queue.value = newEntries + _queue.value
+        workerScope.launch {
+            val serverKey = currentServerKey() ?: return@launch
+            additions.forEach { item ->
+                database.downloadTasks().upsert(
+                    dev.wearjelly.data.offline.DownloadTaskEntity(
+                        serverKey = serverKey,
+                        taskId = item.id,
+                        itemId = item.id,
+                        itemJson = json.encodeToString(item),
+                        status = "WAITING",
+                        qualityLabel = label,
+                        updatedAtMs = System.currentTimeMillis(),
+                    )
+                )
+            }
+        }
         startWorker()
     }
 
@@ -156,8 +205,25 @@ class DownloadManager(
     private suspend fun downloadNow(itemId: String, itemName: String, artistText: String): Boolean = withContext(Dispatchers.IO) {
         val item = _downloads.value.firstOrNull { it.item.id == itemId }?.item
             ?: JellyfinItem(id = itemId, name = itemName, artists = listOf(artistText))
+        val serverKey = currentServerKey()
+        serverKey?.let {
+            database.downloadTasks().upsert(
+                dev.wearjelly.data.offline.DownloadTaskEntity(
+                    serverKey = it,
+                    taskId = item.id,
+                    itemId = item.id,
+                    itemJson = json.encodeToString(item),
+                    status = "RUNNING",
+                    qualityLabel = repository.bitrate.value.displayName,
+                    updatedAtMs = System.currentTimeMillis(),
+                )
+            )
+        }
         val url = repository.streamUrl(item.id)
-        if (url.isBlank()) return@withContext false
+        if (url.isBlank()) {
+            serverKey?.let { database.downloadTasks().updateStatus(it, item.id, "FAILED", "未找到音频流地址", 0L, -1L, System.currentTimeMillis()) }
+            return@withContext false
+        }
 
         val selectedBitrate = repository.bitrate.value
         val qualityLabel = selectedBitrate.displayName
@@ -182,7 +248,7 @@ class DownloadManager(
                 val totalBytes = contentLength.takeIf { it > 0L } ?: estimatedBytes
                 val isEstimated = contentLength <= 0L && estimatedBytes > 0L
                 var downloadedBytes = 0L
-                fun pushProgress() {
+                suspend fun pushProgress() {
                     _progress.value = _progress.value + (
                         item.id to DownloadProgress(
                             itemId = item.id,
@@ -193,6 +259,9 @@ class DownloadManager(
                             qualityLabel = qualityLabel,
                         )
                     )
+                    serverKey?.let {
+                        database.downloadTasks().updateProgress(it, item.id, downloadedBytes, totalBytes, System.currentTimeMillis())
+                    }
                     updateEntry(item.id) {
                         it.copy(downloadedBytes = downloadedBytes, totalBytes = totalBytes, estimated = isEstimated)
                     }
@@ -213,13 +282,15 @@ class DownloadManager(
                 }
                 if (tempFile.exists()) {
                     if (targetFile.exists()) targetFile.delete()
-                    tempFile.renameTo(targetFile)
+                    check(tempFile.renameTo(targetFile)) { "无法原子移动下载文件" }
                 }
             }
 
             if (targetFile.exists()) {
                 val coverFile = File(downloadsDir, "${item.id}.jpg")
-                val coverSaved = try {
+                val coverSaved = if (coverFile.exists()) {
+                    true
+                } else try {
                     repository.imageUrl(item, maxWidth = 500)?.let { coverUrl ->
                         client.newCall(Request.Builder().url(coverUrl).build()).execute().use { coverResponse ->
                             if (coverResponse.isSuccessful) {
@@ -227,9 +298,7 @@ class DownloadManager(
                                     FileOutputStream(coverFile).use { output -> input.copyTo(output) }
                                 }
                                 true
-                            } else {
-                                false
-                            }
+                            } else false
                         }
                     } ?: false
                 } catch (e: Exception) {
@@ -246,6 +315,12 @@ class DownloadManager(
                     qualityLabel = qualityLabel,
                 )
                 saveIndex(_downloads.value.filter { it.item.id != item.id } + record)
+                serverKey?.let { key ->
+                    database.withTransaction {
+                        database.tracks().updateMediaState(key, item.id, targetFile.absolutePath, if (coverSaved) coverFile.absolutePath else null, record.downloadedTimeMs, qualityLabel)
+                        database.downloadTasks().updateStatus(key, item.id, "DONE", null, targetFile.length(), targetFile.length(), record.downloadedTimeMs)
+                    }
+                }
                 true
             } else {
                 false

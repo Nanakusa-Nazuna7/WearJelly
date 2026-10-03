@@ -84,6 +84,9 @@ interface PlaylistDao {
 
     @Query("SELECT * FROM PlaylistEntity WHERE serverKey = :serverKey ORDER BY name COLLATE NOCASE")
     suspend fun all(serverKey: String): List<PlaylistEntity>
+
+    @Query("DELETE FROM PlaylistEntity WHERE serverKey = :serverKey")
+    suspend fun deleteAll(serverKey: String)
 }
 
 @Dao
@@ -96,6 +99,9 @@ interface PlaylistTrackDao {
 
     @Query("SELECT * FROM PlaylistTrackEntity WHERE serverKey = :serverKey AND playlistId = :playlistId ORDER BY orderIndex")
     suspend fun tracksInOrder(serverKey: String, playlistId: String): List<PlaylistTrackEntity>
+
+    @Query("DELETE FROM PlaylistTrackEntity WHERE serverKey = :serverKey")
+    suspend fun deleteAll(serverKey: String)
 
     @Transaction
     suspend fun replaceSnapshot(serverKey: String, playlistId: String, trackIdsInOrder: List<String>) {
@@ -134,6 +140,12 @@ interface DownloadTaskDao {
 
     @Query("UPDATE DownloadTaskEntity SET status = 'WAITING' WHERE serverKey = :serverKey AND status = 'RUNNING'")
     suspend fun recoverRunning(serverKey: String): Int
+
+    @Query("UPDATE DownloadTaskEntity SET downloadedBytes = :downloadedBytes, totalBytes = :totalBytes, updatedAtMs = :updatedAtMs WHERE serverKey = :serverKey AND taskId = :taskId")
+    suspend fun updateProgress(serverKey: String, taskId: String, downloadedBytes: Long, totalBytes: Long, updatedAtMs: Long)
+
+    @Query("UPDATE DownloadTaskEntity SET status = :status, failureReason = :failureReason, downloadedBytes = :downloadedBytes, totalBytes = :totalBytes, updatedAtMs = :updatedAtMs WHERE serverKey = :serverKey AND taskId = :taskId")
+    suspend fun updateStatus(serverKey: String, taskId: String, status: String, failureReason: String?, downloadedBytes: Long, totalBytes: Long, updatedAtMs: Long)
 }
 
 fun JellyfinItem.toTrackEntity(serverKey: String): TrackEntity = TrackEntity(

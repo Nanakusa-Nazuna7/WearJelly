@@ -104,6 +104,8 @@ class OfflineLibrarySync(
                     isOfflineAvailable = true
                 )
             )
+            database.playlistTracks().deleteAll(serverKey)
+            database.playlists().deleteAll(serverKey)
             snapshots.forEach { (playlist, items) ->
                 database.playlists().upsert(
                     PlaylistEntity(
