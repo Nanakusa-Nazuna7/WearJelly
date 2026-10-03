@@ -8,8 +8,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
@@ -51,6 +54,11 @@ class DownloadManager(
 
     private val workerActive = AtomicBoolean(false)
     private val workerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** CacheIndex：已缓存歌曲 id 集合（由 downloads 派生，删除/完成后自动实时更新）。 */
+    val cachedTrackIds: StateFlow<Set<String>> = _downloads
+        .map { list -> list.mapTo(mutableSetOf()) { it.item.id } }
+        .stateIn(workerScope, SharingStarted.Eagerly, emptySet())
 
     private val downloadsDir: File
         get() = File(context.filesDir, "audio_downloads").apply { if (!exists()) mkdirs() }

@@ -36,14 +36,18 @@ internal sealed interface AppScreen {
     data object Player : AppScreen
     data object Queue : AppScreen
     data object Lyrics : AppScreen
+    data object LyricsSettings : AppScreen
     data object Downloads : AppScreen
     data object History : AppScreen
     data class ScopeActions(val query: LibraryQuery, val title: String) : AppScreen
+    data class BatchActions(val query: LibraryQuery, val title: String) : AppScreen
+    data class ListActions(val query: LibraryQuery, val title: String) : AppScreen
+    data class SongInfo(val item: JellyfinItem) : AppScreen
     data object Settings : AppScreen
-    data class Confirm(val action: ConfirmAction) : AppScreen
+    data class Confirm(val action: ConfirmAction, val query: LibraryQuery? = null) : AppScreen
 }
 
-internal enum class ConfirmAction { CLEAR_QUEUE, SWITCH_SERVER, LOGOUT }
+internal enum class ConfirmAction { CLEAR_QUEUE, SWITCH_SERVER, LOGOUT, DELETE_LIST_CACHES }
 
 // AccountUi contains no token. Login values are deliberately never put into saved state.
 internal data class AccountUi(val serverUrl: String, val userName: String)
@@ -73,6 +77,8 @@ internal data class LyricsUi(
     val loaded: Boolean = false,
     val lyrics: SongLyrics? = null,
     val error: String? = null,
+    /** 服务器确认无歌词（NotFound）：按"纯音乐"展示，与加载失败区分。 */
+    val notFound: Boolean = false,
 )
 
 internal data class AppUiState(
@@ -83,17 +89,20 @@ internal data class AppUiState(
     val lyrics: LyricsUi = LyricsUi(),
     val notice: String? = null,
     val sessionGeneration: Long = 0,
-    val selectionMode: Boolean = false,
-    val selectedSongIds: Set<String> = emptySet(),
+    val selection: SelectionSnapshot = SelectionSnapshot(),
 ) {
     val screen: AppScreen get() = backStack.last()
+    val selectionMode: Boolean get() = selection.active
+    val selectedSongIds: Set<String> get() = selection.selectedIds
 }
 
 class AppViewModel(
     val repository: JellyfinRepository,
     val playback: PlaybackConnection,
     val downloadManager: dev.wearjelly.data.DownloadManager,
-    val historyStore: dev.wearjelly.data.HistoryStore
+    val historyStore: dev.wearjelly.data.HistoryStore,
+    private val lastPlaybackStore: dev.wearjelly.data.LastPlaybackStore,
+    private val lyricsPrefs: dev.wearjelly.data.LyricsPrefs,
 ) : ViewModel() {
     val session: StateFlow<ServerSession?> = repository.session
     val playbackState: StateFlow<PlaybackState> = playback.state
@@ -103,6 +112,8 @@ class AppViewModel(
     val downloadProgress: StateFlow<Map<String, dev.wearjelly.data.DownloadProgress>> = downloadManager.progress
     val downloadQueue: StateFlow<List<dev.wearjelly.data.QueueEntry>> = downloadManager.queue
     val history: StateFlow<List<dev.wearjelly.data.HistoryEntry>> = historyStore.entries
+    val lastPlayback: StateFlow<dev.wearjelly.data.LastPlayback?> = lastPlaybackStore.lastPlayback
+    val cachedTrackIds: StateFlow<Set<String>> = downloadManager.cachedTrackIds
     private val mutableUi = MutableStateFlow(AppUiState())
     internal val uiState = mutableUi.asStateFlow()
 
@@ -220,19 +231,15 @@ class AppViewModel(
 
     internal fun openItem(query: LibraryQuery, item: JellyfinItem) {
         when (query.kind) {
+            // 点击艺人：直接进入该艺人全部歌曲列表（不经过专辑页）
             LibraryKind.ARTISTS -> navigate(
-                AppScreen.Library(LibraryQuery(LibraryKind.ALBUMS, artistId = item.id), item.name),
+                AppScreen.Library(LibraryQuery(LibraryKind.SONGS, artistId = item.id), item.name),
             )
             LibraryKind.ALBUMS -> navigate(
                 AppScreen.Library(LibraryQuery(LibraryKind.SONGS, parentId = item.id), item.name),
             )
             LibraryKind.SONGS, LibraryKind.DOWNLOADS -> navigate(AppScreen.Track(item, query))
         }
-    }
-
-    internal fun openArtistSongs(screen: AppScreen.Library) {
-        val artistId = screen.query.artistId ?: return
-        navigate(AppScreen.Library(LibraryQuery(LibraryKind.SONGS, artistId = artistId), screen.title))
     }
 
     internal fun openScopeActions(query: LibraryQuery, title: String) {
@@ -400,21 +407,20 @@ class AppViewModel(
         if (playbackAction { playback.play(items, index) }) navigate(AppScreen.Player)
     }
 
-    internal fun toggleSongSelection(itemId: String) {
-        mutableUi.update { state ->
-            val next = state.selectedSongIds.toMutableSet().apply {
-                if (!add(itemId)) remove(itemId)
-            }
-            state.copy(selectionMode = true, selectedSongIds = next)
-        }
+    internal fun beginSelectionFromSwipe(itemId: String) {
+        mutableUi.update { it.copy(selection = SelectionLogic.enterFromSwipe(itemId)) }
     }
 
-    internal fun enterSelectionMode() {
-        mutableUi.update { it.copy(selectionMode = true, selectedSongIds = emptySet()) }
+    internal fun toggleSongSelection(itemId: String) {
+        mutableUi.update { it.copy(selection = SelectionLogic.toggled(it.selection, itemId)) }
+    }
+
+    internal fun selectRangeFromSwipe(itemId: String, orderedIds: List<String>) {
+        mutableUi.update { it.copy(selection = SelectionLogic.rangeSelected(it.selection, itemId, orderedIds)) }
     }
 
     internal fun exitSelectionMode() {
-        mutableUi.update { it.copy(selectionMode = false, selectedSongIds = emptySet()) }
+        mutableUi.update { it.copy(selection = SelectionLogic.cleared()) }
     }
 
     internal fun batchSelectedSongsToQueue(items: List<JellyfinItem>) {
@@ -444,6 +450,69 @@ class AppViewModel(
         downloadManager.enqueue(selected)
         showNotice("已加入缓存队列 ${selected.size} 首")
         exitSelectionMode()
+    }
+
+    /** 下一首播放（单曲或批量选中项）：插到当前曲目之后，完成后退出多选。 */
+    internal fun playItemsNext(items: List<JellyfinItem>) {
+        if (items.isEmpty()) return
+        viewModelScope.launch {
+            if (!waitForConnected()) {
+                showNotice("播放器连接失败，请重试")
+                return@launch
+            }
+            playback.insertNext(items).fold(
+                onSuccess = {
+                    showNotice("已设为下一首播放 ${items.size} 首")
+                    exitSelectionMode()
+                },
+                onFailure = { showNotice(it.localizedMessage ?: "下一首播放失败") },
+            )
+        }
+    }
+
+    /** 删除一批歌曲的本地缓存（不做多选状态处理，由调用方决定）。 */
+    internal fun deleteCachedTracks(itemIds: Collection<String>) {
+        val deleted = itemIds.count { id ->
+            if (downloadManager.isDownloaded(id)) {
+                downloadManager.deleteDownload(id)
+                true
+            } else {
+                false
+            }
+        }
+        showNotice(if (deleted > 0) "已删除 $deleted 首缓存" else "这些歌曲没有已缓存文件")
+    }
+
+    /** 从当前列表视图移除（仅本次会话，不改动服务端数据）。 */
+    internal fun removeFromLibraryView(query: LibraryQuery, itemIds: Set<String>) {
+        if (itemIds.isEmpty()) return
+        updateLibrary(query) {
+            val removed = items.count { it.id in itemIds }
+            copy(
+                items = items.filterNot { it.id in itemIds },
+                total = (total - removed).coerceAtLeast(0),
+                nextOffset = (nextOffset - removed).coerceAtLeast(0),
+            )
+        }
+        showNotice("已从当前列表移除 ${itemIds.size} 首")
+    }
+
+    internal fun selectAllIn(query: LibraryQuery) {
+        val orderedIds = mutableUi.value.libraries[query]?.items?.map { it.id } ?: return
+        mutableUi.update { it.copy(selection = SelectionLogic.allSelected(it.selection, orderedIds)) }
+    }
+
+    internal fun invertSelectionIn(query: LibraryQuery) {
+        val orderedIds = mutableUi.value.libraries[query]?.items?.map { it.id } ?: return
+        mutableUi.update { it.copy(selection = SelectionLogic.inverted(it.selection, orderedIds)) }
+    }
+
+    /** 随机播放全部：确保随机模式开启后从列表头播放。 */
+    internal fun playAllShuffled(query: LibraryQuery) {
+        if (!playback.state.value.shuffleEnabled) {
+            playbackAction { playback.toggleShuffle() }
+        }
+        playLoaded(query, null)
     }
 
     internal fun batchAllSongsToQueue(query: LibraryQuery) {
@@ -555,6 +624,19 @@ class AppViewModel(
         }
     }
 
+    /** 从上次播放记忆的位置继续播放（服务启动时已预载队列，这里只需 play）。 */
+    internal fun resumeLastPlayback() {
+        if (repository.session.value == null) return
+        if (!playback.state.value.connected) reconnectPlayback()
+        viewModelScope.launch {
+            if (!waitForConnected()) {
+                showNotice("播放器连接失败，请重试")
+                return@launch
+            }
+            if (!playback.resumePlayback()) showNotice("没有可恢复的播放")
+        }
+    }
+
     internal fun reconnectPlayback() {
         if (repository.session.value == null) return
         try {
@@ -599,10 +681,26 @@ class AppViewModel(
         mutableUi.update { it.copy(lyrics = LyricsUi(itemId = itemId, loading = true)) }
         lyricsJob = viewModelScope.launch {
             try {
-                val result = repository.lyrics(itemId)
-                if (requestGeneration != generation || playback.state.value.current?.id != itemId) return@launch
-                mutableUi.update {
-                    it.copy(lyrics = LyricsUi(itemId = itemId, loaded = true, lyrics = result))
+                when (val result = repository.lyrics(itemId)) {
+                    is dev.wearjelly.data.LyricsResult.Found -> {
+                        if (requestGeneration != generation || playback.state.value.current?.id != itemId) return@launch
+                        mutableUi.update {
+                            it.copy(lyrics = LyricsUi(itemId = itemId, loaded = true, lyrics = result.lyrics))
+                        }
+                    }
+                    dev.wearjelly.data.LyricsResult.NotFound -> {
+                        if (requestGeneration != generation || playback.state.value.current?.id != itemId) return@launch
+                        mutableUi.update {
+                            it.copy(lyrics = LyricsUi(itemId = itemId, loaded = true, notFound = true))
+                        }
+                    }
+                    is dev.wearjelly.data.LyricsResult.Error -> {
+                        if (requestGeneration == generation && playback.state.value.current?.id == itemId) {
+                            mutableUi.update {
+                                it.copy(lyrics = LyricsUi(itemId = itemId, error = result.message ?: "歌词加载失败"))
+                            }
+                        }
+                    }
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -616,14 +714,39 @@ class AppViewModel(
         }
     }
 
-    internal fun requestConfirmation(action: ConfirmAction) = navigate(AppScreen.Confirm(action))
+    // ---- 歌词偏好（REQ-LYRICS-MIN-003）----
 
-    internal fun confirm(action: ConfirmAction) {
-        if (mutableUi.value.screen != AppScreen.Confirm(action)) return
+    val lyricsOffsets: StateFlow<Map<String, Long>> = lyricsPrefs.offsets
+    val lyricsFontSize: StateFlow<dev.wearjelly.data.LyricsFontSize> = lyricsPrefs.fontSize
+
+    fun adjustLyricsOffset(deltaMs: Long) {
+        val itemId = playback.state.value.current?.id ?: return
+        lyricsPrefs.adjustOffset(itemId, deltaMs)
+    }
+
+    fun resetLyricsOffset() {
+        val itemId = playback.state.value.current?.id ?: return
+        lyricsPrefs.resetOffset(itemId)
+    }
+
+    fun setLyricsFontSize(size: dev.wearjelly.data.LyricsFontSize) {
+        lyricsPrefs.setFontSize(size)
+    }
+
+    internal fun requestConfirmation(action: ConfirmAction, query: LibraryQuery? = null) =
+        navigate(AppScreen.Confirm(action, query))
+
+    internal fun confirm(action: ConfirmAction, query: LibraryQuery? = null) {
+        if (mutableUi.value.screen != AppScreen.Confirm(action, query)) return
         when (action) {
             ConfirmAction.CLEAR_QUEUE -> {
                 goBack()
                 playbackAction { playback.stopAndClear() }
+            }
+            ConfirmAction.DELETE_LIST_CACHES -> {
+                goBack()
+                val ids = mutableUi.value.libraries[query]?.items?.map { it.id }.orEmpty()
+                deleteCachedTracks(ids)
             }
             ConfirmAction.SWITCH_SERVER, ConfirmAction.LOGOUT -> {
                 val account = mutableUi.value.account ?: return

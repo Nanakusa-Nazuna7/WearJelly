@@ -194,17 +194,21 @@ class PlaybackConnection(
 
     suspend fun enqueue(item: JellyfinItem): Result<Unit> = enqueueMany(listOf(item))
 
-    suspend fun enqueueMany(items: List<JellyfinItem>): Result<Unit> {
+    suspend fun enqueueMany(items: List<JellyfinItem>): Result<Unit> =
+        sendItemsCommand(PlaybackService.CUSTOM_COMMAND_ENQUEUE_MANY, items)
+
+    /** 下一首播放：插到当前曲目之后；队列为空时由服务退化为直接建队播放。 */
+    suspend fun insertNext(items: List<JellyfinItem>): Result<Unit> =
+        sendItemsCommand(PlaybackService.CUSTOM_COMMAND_INSERT_NEXT, items)
+
+    private suspend fun sendItemsCommand(action: String, items: List<JellyfinItem>): Result<Unit> {
         if (items.isEmpty()) return Result.success(Unit)
         val c = controller ?: return Result.failure(IllegalStateException("播放器尚未连接"))
         val args = Bundle().apply {
             putString(PlaybackService.EXTRA_ITEMS_JSON, json.encodeToString(items))
         }
         return try {
-            val future = c.sendCustomCommand(
-                SessionCommand(PlaybackService.CUSTOM_COMMAND_ENQUEUE_MANY, Bundle.EMPTY),
-                args
-            )
+            val future = c.sendCustomCommand(SessionCommand(action, Bundle.EMPTY), args)
             val result = suspendCancellableCoroutine<SessionResult> { continuation ->
                 future.addListener(
                     {
@@ -238,6 +242,14 @@ class PlaybackConnection(
         }
     }
 
+    /** 从 LastPlayback 恢复态继续播放；队列不存在或未连接返回 false。 */
+    fun resumePlayback(): Boolean {
+        val c = controller ?: return false
+        if (c.mediaItemCount == 0) return false
+        c.play()
+        return true
+    }
+
     fun next() {
         controller?.seekToNextMediaItem()
     }
@@ -253,7 +265,12 @@ class PlaybackConnection(
     }
 
     fun seekTo(positionMs: Long) {
-        controller?.seekTo(positionMs)
+        val c = controller ?: return
+        c.seekTo(positionMs)
+        // 控制器 seekTo 是异步会话命令，立即读取 currentPosition 仍是旧值：
+        // 先刷新其他字段，再乐观更新位置，保证进度条/歌词即时同步；下一次 ticker 以真实位置校正
+        updateStateFromPlayer(c)
+        _state.update { it.copy(positionMs = positionMs.coerceAtLeast(0L)) }
     }
 
     fun playQueueIndex(index: Int) {

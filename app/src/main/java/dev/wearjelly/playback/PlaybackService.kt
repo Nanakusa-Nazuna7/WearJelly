@@ -41,6 +41,7 @@ class PlaybackService : MediaSessionService() {
     private val repository: JellyfinRepository by inject()
     private val downloadManager: dev.wearjelly.data.DownloadManager by inject()
     private val historyStore: dev.wearjelly.data.HistoryStore by inject()
+    private val lastPlaybackStore: dev.wearjelly.data.LastPlaybackStore by inject()
     private val json: Json by inject()
 
     private var player: ExoPlayer? = null
@@ -49,11 +50,13 @@ class PlaybackService : MediaSessionService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var progressReportJob: Job? = null
     private var currentPlayingItemId: String? = null
+    private var lastPlaybackPersistAt = 0L
 
     companion object {
         const val CUSTOM_COMMAND_SET_QUEUE = "dev.wearjelly.SET_QUEUE"
         const val CUSTOM_COMMAND_ENQUEUE = "dev.wearjelly.ENQUEUE"
         const val CUSTOM_COMMAND_ENQUEUE_MANY = "dev.wearjelly.ENQUEUE_MANY"
+        const val CUSTOM_COMMAND_INSERT_NEXT = "dev.wearjelly.INSERT_NEXT"
         const val CUSTOM_COMMAND_REMOVE_AT = "dev.wearjelly.REMOVE_AT"
         const val CUSTOM_COMMAND_MOVE_ITEM = "dev.wearjelly.MOVE_ITEM"
         const val CUSTOM_COMMAND_CLEAR_QUEUE = "dev.wearjelly.CLEAR_QUEUE"
@@ -63,6 +66,9 @@ class PlaybackService : MediaSessionService() {
         const val EXTRA_FROM_INDEX = "extra_from_index"
         const val EXTRA_TO_INDEX = "extra_to_index"
         const val EXTRA_INDEX = "extra_index"
+
+        // LastPlayback 播放中位置保存节流间隔
+        private const val LAST_PLAYBACK_SAVE_INTERVAL_MS = 5_000L
     }
 
     override fun onCreate() {
@@ -103,6 +109,7 @@ class PlaybackService : MediaSessionService() {
                     .add(SessionCommand(CUSTOM_COMMAND_SET_QUEUE, Bundle.EMPTY))
                     .add(SessionCommand(CUSTOM_COMMAND_ENQUEUE, Bundle.EMPTY))
                     .add(SessionCommand(CUSTOM_COMMAND_ENQUEUE_MANY, Bundle.EMPTY))
+                    .add(SessionCommand(CUSTOM_COMMAND_INSERT_NEXT, Bundle.EMPTY))
                     .add(SessionCommand(CUSTOM_COMMAND_REMOVE_AT, Bundle.EMPTY))
                     .add(SessionCommand(CUSTOM_COMMAND_MOVE_ITEM, Bundle.EMPTY))
                     .add(SessionCommand(CUSTOM_COMMAND_CLEAR_QUEUE, Bundle.EMPTY))
@@ -157,6 +164,20 @@ class PlaybackService : MediaSessionService() {
                             }
                         }
                     }
+                    CUSTOM_COMMAND_INSERT_NEXT -> {
+                        val itemsJson = args.getString(EXTRA_ITEMS_JSON)
+                        if (!itemsJson.isNullOrBlank()) {
+                            try {
+                                val items = json.decodeFromString<List<JellyfinItem>>(itemsJson)
+                                handleInsertNext(items)
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                                return Futures.immediateFuture(
+                                    SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE)
+                                )
+                            }
+                        }
+                    }
                     CUSTOM_COMMAND_REMOVE_AT -> {
                         val index = args.getInt(EXTRA_INDEX, -1)
                         if (index in 0 until (player?.mediaItemCount ?: 0)) {
@@ -174,6 +195,7 @@ class PlaybackService : MediaSessionService() {
                     CUSTOM_COMMAND_CLEAR_QUEUE -> {
                         player?.clearMediaItems()
                         stopProgressReporting()
+                        lastPlaybackStore.clear()
                     }
                 }
                 return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
@@ -188,14 +210,20 @@ class PlaybackService : MediaSessionService() {
         player = exo
         mediaSession = session
 
+        restoreLastPlayback()
+
         exo.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 if (isPlaying) {
                     startProgressReporting()
+                    // 兜底补记：缓冲完成进入播放、或从 LastPlayback 恢复后继续播放时
+                    // 没有新的转场事件，历史在这里落账（HistoryStore 自身按曲目去重）
+                    exo.currentMediaItem?.mediaId?.let { recordHistory(it) }
                     reportEvent(PlaybackEvent.START)
                 } else {
                     stopProgressReporting()
                     reportEvent(PlaybackEvent.PROGRESS)
+                    persistLastPlayback(force = true)
                 }
             }
 
@@ -206,7 +234,10 @@ class PlaybackService : MediaSessionService() {
                     reportEvent(PlaybackEvent.STOP, specificItemId = oldId)
                 }
                 currentPlayingItemId = newId
-                if (newId != null && player?.isPlaying == true) {
+                persistLastPlayback(force = true)
+                // 用 playWhenReady 判定播放意图而非 isPlaying：网络流转场时处于
+                // BUFFERING，isPlaying 为 false 会导致历史永远记不上（旧 bug）
+                if (newId != null && player?.playWhenReady == true) {
                     recordHistory(newId)
                     reportEvent(PlaybackEvent.START)
                 }
@@ -216,6 +247,7 @@ class PlaybackService : MediaSessionService() {
                 if (playbackState == Player.STATE_ENDED) {
                     reportEvent(PlaybackEvent.STOP)
                     stopProgressReporting()
+                    persistLastPlayback(force = true)
                 }
             }
 
@@ -248,6 +280,20 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
+    /** 下一首播放：插到当前曲目之后；队列为空时退化为直接建队播放。 */
+    private fun handleInsertNext(items: List<JellyfinItem>) {
+        if (items.isEmpty()) return
+        val exo = player ?: return
+        val mediaItems = items.map(::createMediaItem)
+        if (exo.mediaItemCount == 0) {
+            exo.setMediaItems(mediaItems, 0, 0L)
+            exo.prepare()
+            exo.play()
+        } else {
+            exo.addMediaItems(exo.currentMediaItemIndex + 1, mediaItems)
+        }
+    }
+
     private fun recordHistory(itemId: String) {
         val exo = player ?: return
         val raw = exo.currentMediaItem?.mediaMetadata?.extras?.getString("jellyfin_item_json")
@@ -257,6 +303,59 @@ class PlaybackService : MediaSessionService() {
         } catch (e: Exception) {
             e.printStackTrace()
         }
+    }
+
+    /**
+     * LastPlayback 持久化：force=true 用于切歌/暂停/销毁等关键节点；
+     * 播放中由进度循环按节流间隔保存位置。
+     */
+    private fun persistLastPlayback(force: Boolean) {
+        val exo = player ?: return
+        if (exo.mediaItemCount == 0) return
+        val now = System.currentTimeMillis()
+        if (!force && now - lastPlaybackPersistAt < LAST_PLAYBACK_SAVE_INTERVAL_MS) return
+        lastPlaybackPersistAt = now
+        val items = mutableListOf<JellyfinItem>()
+        for (i in 0 until exo.mediaItemCount) {
+            val raw = exo.getMediaItemAt(i).mediaMetadata.extras?.getString("jellyfin_item_json")
+            if (raw.isNullOrBlank()) continue
+            try {
+                items += json.decodeFromString<JellyfinItem>(raw)
+            } catch (_: Exception) {
+            }
+        }
+        if (items.isEmpty()) return
+        val index = exo.currentMediaItemIndex
+        val (cappedQueue, cappedIndex) = dev.wearjelly.data.LastPlaybackStore.capQueueAroundIndex(items, index)
+        val trackId = exo.currentMediaItem?.mediaId ?: cappedQueue.getOrNull(cappedIndex)?.id ?: return
+        serviceScope.launch {
+            lastPlaybackStore.save(
+                dev.wearjelly.data.LastPlayback(
+                    trackId = trackId,
+                    queue = cappedQueue,
+                    queueIndex = cappedIndex,
+                    positionMs = exo.currentPosition.coerceAtLeast(0L),
+                    repeatMode = exo.repeatMode,
+                    shuffleEnabled = exo.shuffleModeEnabled,
+                    updatedAt = now,
+                )
+            )
+        }
+    }
+
+    /** 冷启动恢复：只载入队列与进度并 prepare，不自动播放。 */
+    private fun restoreLastPlayback() {
+        val exo = player ?: return
+        val snapshot = lastPlaybackStore.lastPlayback.value ?: return
+        if (snapshot.queue.isEmpty()) {
+            lastPlaybackStore.clear()
+            return
+        }
+        val index = snapshot.queueIndex.coerceIn(0, snapshot.queue.size - 1)
+        exo.setMediaItems(snapshot.queue.map(::createMediaItem), index, snapshot.positionMs.coerceAtLeast(0L))
+        exo.repeatMode = snapshot.repeatMode
+        exo.shuffleModeEnabled = snapshot.shuffleEnabled
+        exo.prepare()
     }
 
     private fun createMediaItem(item: JellyfinItem): MediaItem {
@@ -293,6 +392,7 @@ class PlaybackService : MediaSessionService() {
             while (isActive) {
                 delay(10000L) // 每 10 秒定期向 Jellyfin 上报一次播放进度
                 reportEvent(PlaybackEvent.PROGRESS)
+                persistLastPlayback(force = false) // 同节流保存 LastPlayback 位置
             }
         }
     }
@@ -317,6 +417,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        persistLastPlayback(force = true)
         stopProgressReporting()
         reportEvent(PlaybackEvent.STOP)
         serviceScope.cancel()

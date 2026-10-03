@@ -44,8 +44,10 @@ class WearJellyApplication : Application(), ImageLoaderFactory, KoinComponent {
                 single { JellyfinRepository(get(), get(), get()) }
                 single { dev.wearjelly.data.DownloadManager(androidContext(), get(), get(), get()) }
                 single { dev.wearjelly.data.HistoryStore(androidContext(), get()) }
+                single { dev.wearjelly.data.LastPlaybackStore(androidContext(), get()) }
+                single { dev.wearjelly.data.LyricsPrefs(androidContext(), get()) }
                 single { PlaybackConnection(androidContext(), get(), get()) }
-                viewModel { AppViewModel(get(), get(), get(), get()) }
+                viewModel { AppViewModel(get(), get(), get(), get(), get(), get()) }
             })
         }
     }
