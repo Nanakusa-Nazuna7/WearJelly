@@ -26,6 +26,8 @@ internal data class LibraryQuery(
     val kind: LibraryKind,
     val parentId: String? = null,
     val artistId: String? = null,
+    /** 非空表示这是某个播放列表的内容视图，走 `/Playlists/{id}/Items` 并按列表顺序展示。 */
+    val playlistId: String? = null,
 )
 
 internal enum class BatchSource { LIBRARY, DOWNLOADS, HISTORY, QUEUE }
@@ -245,6 +247,9 @@ class AppViewModel(
                 AppScreen.Library(LibraryQuery(LibraryKind.SONGS, parentId = item.id), item.name),
             )
             LibraryKind.SONGS, LibraryKind.DOWNLOADS -> navigate(AppScreen.Track(item, query))
+            LibraryKind.PLAYLISTS -> navigate(
+                AppScreen.Library(LibraryQuery(LibraryKind.SONGS, playlistId = item.id), item.name),
+            )
         }
     }
 
@@ -322,25 +327,35 @@ class AppViewModel(
                 if (!fromStart) all += old.items
                 var total = Int.MAX_VALUE
                 while (offset < total && offset < MAX_FETCH_ITEMS) {
-                    val page = repository.getItems(
-                        kind = query.kind,
-                        parentId = query.parentId,
-                        artistId = query.artistId,
-                        startIndex = offset,
-                        limit = PAGE_SIZE,
-                    )
+                    val playlistId = query.playlistId
+                    val page = if (playlistId != null) {
+                        repository.getPlaylistItems(playlistId, startIndex = offset, limit = PAGE_SIZE)
+                    } else {
+                        repository.getItems(
+                            kind = query.kind,
+                            parentId = query.parentId,
+                            artistId = query.artistId,
+                            startIndex = offset,
+                            limit = PAGE_SIZE,
+                        )
+                    }
                     if (requestGeneration != generation) return@launch
                     total = page.totalRecordCount
                     all += page.items
                     offset += page.items.size
                     if (page.items.isEmpty()) break
                 }
-                val sorted = dev.wearjelly.data.PinyinSort.sort(all.distinctBy { it.id })
+                // 播放列表必须保持服务器给出的列表顺序，不能按拼音重排
+                val ordered = if (query.playlistId != null) {
+                    all
+                } else {
+                    dev.wearjelly.data.PinyinSort.sort(all.distinctBy { it.id })
+                }
                 updateLibrary(query) {
                     copy(
-                        items = sorted,
-                        total = sorted.size,
-                        nextOffset = sorted.size,
+                        items = ordered,
+                        total = ordered.size,
+                        nextOffset = ordered.size,
                         loading = false,
                         loaded = true,
                         endReached = true,
@@ -585,19 +600,24 @@ class AppViewModel(
         }
         val result = mutableListOf<JellyfinItem>()
         var offset = 0
+        val playlistId = query.playlistId
         while (true) {
-            val page = repository.getItems(
-                kind = LibraryKind.SONGS,
-                parentId = query.parentId,
-                artistId = query.artistId,
-                startIndex = offset,
-                limit = PAGE_SIZE,
-            )
+            val page = if (playlistId != null) {
+                repository.getPlaylistItems(playlistId, startIndex = offset, limit = PAGE_SIZE)
+            } else {
+                repository.getItems(
+                    kind = LibraryKind.SONGS,
+                    parentId = query.parentId,
+                    artistId = query.artistId,
+                    startIndex = offset,
+                    limit = PAGE_SIZE,
+                )
+            }
             result += page.items
             offset += page.items.size
             if (page.items.isEmpty() || offset >= page.totalRecordCount) break
         }
-        return result.distinctBy { it.id }
+        return if (playlistId != null) result else result.distinctBy { it.id }
     }
 
     internal fun adjustVolume(direction: Int) = playback.adjustVolume(direction)
@@ -844,6 +864,7 @@ internal val LibraryKind.chineseTitle: String
         LibraryKind.ALBUMS -> "专辑"
         LibraryKind.SONGS -> "歌曲"
         LibraryKind.DOWNLOADS -> "已缓存音乐"
+        LibraryKind.PLAYLISTS -> "播放列表"
     }
 
 internal val PlaybackState.effectiveDurationMs: Long

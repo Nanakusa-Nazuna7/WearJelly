@@ -479,6 +479,20 @@ internal fun HomeScreen(viewModel: AppViewModel, account: AccountUi?) {
 
         item {
             Button(
+                onClick = { viewModel.openLibrary(LibraryKind.PLAYLISTS) },
+                modifier = Modifier.fillMaxWidth().height(42.dp),
+                colors = ButtonDefaults.secondaryButtonColors()
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("播放列表", maxLines = 1)
+                }
+            }
+        }
+
+        item {
+            Button(
                 onClick = { viewModel.navigate(AppScreen.Downloads) },
                 modifier = Modifier.fillMaxWidth().height(42.dp),
                 colors = ButtonDefaults.secondaryButtonColors()
@@ -1207,6 +1221,7 @@ internal fun LibraryItemRow(
                 LibraryKind.ARTISTS -> Icons.Default.Person
                 LibraryKind.ALBUMS -> Icons.Default.Album
                 LibraryKind.SONGS, LibraryKind.DOWNLOADS -> Icons.Default.MusicNote
+                LibraryKind.PLAYLISTS -> Icons.AutoMirrored.Filled.QueueMusic
             }
             val showBadge = query.kind == LibraryKind.SONGS || query.kind == LibraryKind.DOWNLOADS
             if (isCurrent && query.kind != LibraryKind.ARTISTS && query.kind != LibraryKind.ALBUMS) {

@@ -128,6 +128,10 @@ class JellyfinRepository(
                 sb
             }
             LibraryKind.DOWNLOADS -> throw JellyfinException("已缓存音乐从本地读取")
+            LibraryKind.PLAYLISTS -> {
+                val url = "$server/Users/$userId/Items?IncludeItemTypes=Playlist&Recursive=true&StartIndex=$startIndex&Limit=$limit&SortBy=SortName&SortOrder=Ascending"
+                StringBuilder(url)
+            }
         }
 
         urlBuilder.append("&Fields=ItemCounts,PrimaryImageAspectRatio,CanDelete,MediaSourceCount")
@@ -145,6 +149,27 @@ class JellyfinRepository(
             val bodyString = response.body?.string() ?: throw JellyfinException("曲库数据为空")
             val result = json.decodeFromString<JellyfinItemsResult>(bodyString)
             ItemPage(items = result.items, totalRecordCount = result.totalRecordCount)
+        }
+    }
+
+    suspend fun getPlaylistItems(
+        playlistId: String,
+        startIndex: Int = 0,
+        limit: Int = 200
+    ): ItemPage = withContext(Dispatchers.IO) {
+        val currentSession = session.value ?: throw JellyfinException("未登录", 401)
+        val encodedId = URLEncoder.encode(playlistId, "UTF-8")
+        val url = "${currentSession.serverUrl}/Playlists/$encodedId/Items?UserId=${currentSession.userId}&StartIndex=$startIndex&Limit=$limit&Fields=PrimaryImageAspectRatio,MediaSources"
+        val request = Request.Builder()
+            .url(url)
+            .get()
+            .header("X-Emby-Authorization", authHeader(currentSession.accessToken))
+            .build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw JellyfinException("获取播放列表失败 (HTTP ${response.code})", response.code)
+            val bodyString = response.body?.string() ?: throw JellyfinException("播放列表数据为空")
+            val result = json.decodeFromString<JellyfinItemsResult>(bodyString)
+            ItemPage(result.items, result.totalRecordCount)
         }
     }
 

@@ -70,7 +70,8 @@ enum class LibraryKind {
     ARTISTS,
     ALBUMS,
     SONGS,
-    DOWNLOADS
+    DOWNLOADS,
+    PLAYLISTS
 }
 
 enum class AudioBitrate(val kbps: Int, val displayName: String) {
