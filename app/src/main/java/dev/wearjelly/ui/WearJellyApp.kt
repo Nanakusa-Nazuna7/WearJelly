@@ -685,7 +685,7 @@ internal fun LibraryScreen(viewModel: AppViewModel, screen: AppScreen.Library) {
     val downloadingIds by viewModel.downloadingIds.collectAsState()
     val downloadProgress by viewModel.downloadProgress.collectAsState()
     val isSongsScreen = screen.query.kind == LibraryKind.SONGS
-    val isSelectable = isSongsScreen || screen.query.kind == LibraryKind.ARTISTS
+    val isSelectable = isSongsScreen || screen.query.kind == LibraryKind.ARTISTS || screen.query.kind == LibraryKind.ALBUMS
     // t2：详情页顶部"更多"已移除（能力迁移到上一级长按菜单），头项仅剩标题
     val headerItems = 1
     rememberSongListAnchor(listState, lib.items, headerItems)
@@ -797,7 +797,7 @@ internal fun LibraryScreen(viewModel: AppViewModel, screen: AppScreen.Library) {
                             if (selectionMode && isSelectable) {
                                 // MT-002：范围选择
                                 viewModel.selectRangeFromSwipe(item.id, lib.items.map { it.id })
-                            } else if (isSongsScreen) {
+                            } else if (isSelectable) {
                                 viewModel.beginSelectionFromSwipe(item.id)
                             }
                         },
