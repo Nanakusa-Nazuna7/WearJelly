@@ -99,8 +99,8 @@ internal fun SeekableProgressBar(
                 val xPx = (playedFraction * constraints.maxWidth).coerceIn(bubbleWidthPx / 2f, maxX)
                 Text(
                     text = "${formatTime(displayMs)} / ${formatTime(durationMs)}",
-                    fontSize = 10.sp,
-                    color = Color.White,
+                    style = MaterialTheme.typography.bodyExtraSmall,
+                    color = MaterialTheme.colorScheme.onBackground,
                     modifier = Modifier
                         .offset { IntOffset((xPx - bubbleWidthPx / 2f).roundToInt(), 0) }
                         .clip(RoundedCornerShape(8.dp))
@@ -223,8 +223,8 @@ internal fun SeekableProgressBar(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text(text = formatTime(displayMs), fontSize = 10.sp, color = Color.Gray)
-            Text(text = formatTime(durationMs), fontSize = 10.sp, color = Color.Gray)
+            Text(text = formatTime(displayMs), style = MaterialTheme.typography.bodyExtraSmall, color = MaterialTheme.colorScheme.outline)
+            Text(text = formatTime(durationMs), style = MaterialTheme.typography.bodyExtraSmall, color = MaterialTheme.colorScheme.outline)
         }
     }
 }

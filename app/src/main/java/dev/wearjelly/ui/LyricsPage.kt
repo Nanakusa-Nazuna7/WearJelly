@@ -142,7 +142,7 @@ internal fun LyricsPage(viewModel: AppViewModel) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black)
+            .background(MaterialTheme.colorScheme.background)
             .pointerInput(Unit) {
                 detectTapGestures(onLongPress = { viewModel.navigate(AppScreen.LyricsSettings) })
             }
@@ -187,12 +187,12 @@ internal fun LyricsPage(viewModel: AppViewModel) {
         ) {
             Text(
                 text = formatTime(displayMs),
-                fontSize = 12.sp,
+                style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.Bold,
-                color = if (preview != null) Color.White else MaterialTheme.colorScheme.primary
+                color = if (preview != null) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.primary
             )
             if (preview != null) {
-                Text("预览中 · 再点确认跳转", fontSize = 9.sp, color = Color(0xFF8A93A5))
+                Text("预览中 · 再点确认跳转", style = MaterialTheme.typography.bodyExtraSmall, color = MaterialTheme.colorScheme.outlineVariant)
             }
         }
 
@@ -211,9 +211,9 @@ internal fun LyricsPage(viewModel: AppViewModel) {
                 if (timeMs != null) {
                     Text(
                         text = formatTime(timeMs),
-                        fontSize = 14.sp,
+                        style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White,
+                        color = MaterialTheme.colorScheme.onBackground,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.padding(end = 10.dp)
                     )
@@ -267,7 +267,7 @@ internal fun LyricsPage(viewModel: AppViewModel) {
                         Box(
                             modifier = Modifier
                                 .size(9.dp)
-                                .background(Color(0xFF7BD88F), CircleShape),
+                                .background(StatusGreen, CircleShape),
                             contentAlignment = Alignment.Center
                         ) { CachedTick() }
                     }
@@ -282,27 +282,27 @@ internal fun LyricsPage(viewModel: AppViewModel) {
                 }
             } else if (lyricsUi.notFound) {
                 item {
-                    Text("纯音乐，请欣赏", color = Color.Gray, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding).transformedHeight(this, transformationSpec))
+                    Text("纯音乐，请欣赏", color = MaterialTheme.colorScheme.outline, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding).transformedHeight(this, transformationSpec))
                 }
             } else if (lyricsUi.error != null) {
                 item {
                     Column(horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier.minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
                             .transformedHeight(this, transformationSpec)) {
-                        Text("歌词加载失败", color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                        Text("歌词加载失败", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
                         Spacer(Modifier.height(6.dp))
                         Button(
                             onClick = { viewModel.loadLyrics(force = true) },
                             modifier = Modifier.height(34.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer, contentColor = MaterialTheme.colorScheme.onSurface)
                         ) {
-                            Text("重试", fontSize = 11.sp, maxLines = 1)
+                            Text("重试", style = MaterialTheme.typography.labelSmall, maxLines = 1)
                         }
                     }
                 }
             } else if (lyrics == null || lyrics.lines.isEmpty()) {
                 item {
-                    Text("纯音乐，请欣赏", color = Color.Gray, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding).transformedHeight(this, transformationSpec))
+                    Text("纯音乐，请欣赏", color = MaterialTheme.colorScheme.outline, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding).transformedHeight(this, transformationSpec))
                 }
             } else {
                 itemsIndexed(lyrics.lines) { index, line ->
@@ -326,9 +326,9 @@ internal fun LyricsPage(viewModel: AppViewModel) {
                         style = style.copy(
                             fontWeight = if (isCurrent || isPreview) FontWeight.Bold else FontWeight.Normal,
                             color = when {
-                                isPreview -> Color.White
+                                isPreview -> MaterialTheme.colorScheme.onBackground
                                 isCurrent -> MaterialTheme.colorScheme.primary
-                                else -> Color.LightGray
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant
                             }
                         ),
                         modifier = Modifier
@@ -381,7 +381,7 @@ internal fun LyricsSettingsScreen(viewModel: AppViewModel) {
         }
 
         item {
-            Text("字号", fontSize = 11.sp, color = Color(0xFF8A93A5),
+            Text("字号", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outlineVariant,
                 modifier = Modifier.minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
                     .transformedHeight(this, transformationSpec))
         }
@@ -399,14 +399,14 @@ internal fun LyricsSettingsScreen(viewModel: AppViewModel) {
                             ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer, contentColor = MaterialTheme.colorScheme.onSurface)
                         }
                     ) {
-                        Text(size.displayName, fontSize = 11.sp, maxLines = 1)
+                        Text(size.displayName, style = MaterialTheme.typography.labelSmall, maxLines = 1)
                     }
                 }
             }
         }
 
         item {
-            Text("歌词偏移（当前歌曲）", fontSize = 11.sp, color = Color(0xFF8A93A5),
+            Text("歌词偏移（当前歌曲）", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outlineVariant,
                 modifier = Modifier.minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
                     .transformedHeight(this, transformationSpec))
         }
@@ -415,8 +415,8 @@ internal fun LyricsSettingsScreen(viewModel: AppViewModel) {
             Text(
                 text = (if (currentOffset > 0) "+" else "") +
                     String.format(java.util.Locale.US, "%.1f", seconds) + "s",
-                fontSize = 13.sp,
-                color = Color.White,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onBackground,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
                     .transformedHeight(this, transformationSpec)
@@ -431,27 +431,27 @@ internal fun LyricsSettingsScreen(viewModel: AppViewModel) {
                     modifier = Modifier.height(34.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer, contentColor = MaterialTheme.colorScheme.onSurface)
                 ) {
-                    Text("-0.5s", fontSize = 11.sp, maxLines = 1)
+                    Text("-0.5s", style = MaterialTheme.typography.labelSmall, maxLines = 1)
                 }
                 Button(
                     onClick = { viewModel.adjustLyricsOffset(500L) },
                     modifier = Modifier.height(34.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer, contentColor = MaterialTheme.colorScheme.onSurface)
                 ) {
-                    Text("+0.5s", fontSize = 11.sp, maxLines = 1)
+                    Text("+0.5s", style = MaterialTheme.typography.labelSmall, maxLines = 1)
                 }
                 Button(
                     onClick = { viewModel.resetLyricsOffset() },
                     modifier = Modifier.height(34.dp),
                     colors = solidButtonColors(Color(0xFF4A5568))
                 ) {
-                    Text("重置", fontSize = 11.sp, color = Color.White, maxLines = 1)
+                    Text("重置", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onBackground, maxLines = 1)
                 }
             }
         }
 
         item {
-            Text("偏移仅对当前歌曲记忆，重启后仍生效", fontSize = 9.sp, color = Color.Gray,
+            Text("偏移仅对当前歌曲记忆，重启后仍生效", style = MaterialTheme.typography.bodyExtraSmall, color = MaterialTheme.colorScheme.outline,
                 modifier = Modifier.minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
                     .transformedHeight(this, transformationSpec))
         }
@@ -464,7 +464,7 @@ internal fun LyricsSettingsScreen(viewModel: AppViewModel) {
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer, contentColor = MaterialTheme.colorScheme.onSurface),
                 transformation = SurfaceTransformation(transformationSpec)
             ) {
-                Text("返回", fontSize = 12.sp, maxLines = 1)
+                Text("返回", style = MaterialTheme.typography.labelSmall, maxLines = 1)
             }
         }
     }

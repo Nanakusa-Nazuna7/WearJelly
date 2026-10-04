@@ -10,6 +10,7 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -48,7 +49,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Album
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MusicNote
@@ -98,7 +103,6 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
@@ -117,11 +121,13 @@ import androidx.wear.compose.material3.CircularProgressIndicator
 import androidx.wear.compose.material3.ColorScheme
 import androidx.wear.compose.material3.Icon
 import androidx.wear.compose.material3.MaterialTheme
+import androidx.wear.compose.material3.MotionScheme
 import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.SwipeToDismissBox
 import androidx.wear.compose.material3.SurfaceTransformation
 import androidx.wear.compose.material3.Text
 import androidx.wear.compose.material3.TextDefaults
+import androidx.wear.compose.material3.Typography
 import androidx.wear.compose.material3.contentColorFor
 import androidx.wear.compose.material3.lazy.rememberTransformationSpec
 import androidx.wear.compose.material3.lazy.transformedHeight
@@ -148,8 +154,68 @@ private val WearThemeColors = ColorScheme(
     onSecondary = Color(0xFF001A40),
     onBackground = Color(0xFFFFFFFF),
     onSurface = Color(0xFFE0E0E0),
+    // 次级文本三档（原散落的灰色字面量收口到主题：轮廓 / 次级提示 / 浅灰内容）
+    outline = Color.Gray,
+    outlineVariant = Color(0xFF8A93A5),
+    onSurfaceVariant = Color.LightGray,
     onError = Color(0xFFFFFFFF),
     error = Color(0xFFFF6B6B)
+)
+
+/** 业务状态强调色（M3 ColorScheme 无 success 位）：已缓存绿，缓存失败红。 */
+internal val StatusGreen = Color(0xFF7BD88F)
+internal val StatusRed = Color(0xFFE05A5A)
+
+/**
+ * 统一排版（t4：一个 MaterialTheme 只出一套 typography）。
+ * 尺寸对齐迁移前 Wear M2 视觉，避免默认 M3 token 漂移：
+ * titleSmall=原 title3 16sp、labelLarge=原 button 15sp、labelMedium=原 caption1 14sp、
+ * labelSmall=原 caption2 12sp、bodyLarge=原 body1 16sp、bodyMedium=原 body2 14sp、
+ * bodyExtraSmall=原 caption3 10sp（吸收 9/10sp 字面量），其余走 M3 默认。
+ */
+private val WearThemeTypography = Typography(
+    titleSmall = TextStyle(
+        fontSize = 16.sp,
+        fontWeight = FontWeight.Medium,
+        lineHeight = 20.sp,
+        letterSpacing = 0.2.sp
+    ),
+    labelLarge = TextStyle(
+        fontSize = 15.sp,
+        fontWeight = FontWeight.Bold,
+        lineHeight = 19.sp,
+        letterSpacing = 0.38.sp
+    ),
+    labelMedium = TextStyle(
+        fontSize = 14.sp,
+        fontWeight = FontWeight.Medium,
+        lineHeight = 18.sp,
+        letterSpacing = 0.1.sp
+    ),
+    labelSmall = TextStyle(
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Medium,
+        lineHeight = 16.sp,
+        letterSpacing = 0.1.sp
+    ),
+    bodyLarge = TextStyle(
+        fontSize = 16.sp,
+        fontWeight = FontWeight.Normal,
+        lineHeight = 20.sp,
+        letterSpacing = 0.18.sp
+    ),
+    bodyMedium = TextStyle(
+        fontSize = 14.sp,
+        fontWeight = FontWeight.Normal,
+        lineHeight = 18.sp,
+        letterSpacing = 0.2.sp
+    ),
+    bodyExtraSmall = TextStyle(
+        fontSize = 10.sp,
+        fontWeight = FontWeight.Normal,
+        lineHeight = 14.sp,
+        letterSpacing = 0.1.sp
+    )
 )
 
 /**
@@ -166,7 +232,11 @@ internal fun solidButtonColors(backgroundColor: Color): ButtonColors =
 
 @Composable
 fun WearJellyApp(viewModel: AppViewModel) {
-    MaterialTheme(colorScheme = WearThemeColors) {
+    MaterialTheme(
+        colorScheme = WearThemeColors,
+        typography = WearThemeTypography,
+        motionScheme = MotionScheme.standard()
+    ) {
         val uiState by viewModel.uiState.collectAsState()
         val stateHolder = rememberSaveableStateHolder()
         val isRootScreen = uiState.backStack.size <= 1
@@ -189,14 +259,14 @@ fun WearJellyApp(viewModel: AppViewModel) {
         AppScaffold(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black),
+                .background(MaterialTheme.colorScheme.background),
             timeText = {}
         ) {
             val screenContent: @Composable () -> Unit = {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(Color.Black)
+                        .background(MaterialTheme.colorScheme.background)
                 ) {
                     // 页面转场：Player↔Lyrics 左右滑动呼应（左滑进歌词页从右滑入，不再闪现），其余快速淡入淡出
                     AnimatedContent(
@@ -220,7 +290,7 @@ fun WearJellyApp(viewModel: AppViewModel) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxSize()
-                                    .background(Color.Black)
+                                    .background(MaterialTheme.colorScheme.background)
                             ) {
                                 when (screen) {
                         is AppScreen.Login -> LoginScreen(viewModel, uiState.login)
@@ -254,7 +324,7 @@ fun WearJellyApp(viewModel: AppViewModel) {
                         modifier = Modifier.fillMaxSize(),
                         content = { isBackground ->
                             if (isBackground) {
-                                Box(modifier = Modifier.fillMaxSize().background(Color.Black))
+                                Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background))
                             } else {
                                 screenContent()
                             }
@@ -264,8 +334,8 @@ fun WearJellyApp(viewModel: AppViewModel) {
                 uiState.notice?.let { notice ->
                     Text(
                         text = notice,
-                        fontSize = 11.sp,
-                        color = Color.White,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onBackground,
                         textAlign = TextAlign.Center,
                         maxLines = 2,
                         modifier = Modifier
@@ -300,7 +370,7 @@ private fun LoginTextField(
         value = value,
         onValueChange = onValueChange,
         singleLine = true,
-        textStyle = TextStyle(color = Color.White),
+        textStyle = TextStyle(color = MaterialTheme.colorScheme.onBackground),
         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
         visualTransformation = visualTransformation,
         keyboardOptions = keyboardOptions,
@@ -317,7 +387,7 @@ private fun LoginTextField(
                     .padding(horizontal = 12.dp, vertical = 10.dp)
             ) {
                 if (value.isEmpty()) {
-                    Text(label, fontSize = 10.sp, color = Color.Gray)
+                    Text(label, style = MaterialTheme.typography.bodyExtraSmall, color = MaterialTheme.colorScheme.outline)
                 }
                 innerTextField()
             }
@@ -471,7 +541,7 @@ internal fun HomeScreen(viewModel: AppViewModel, account: AccountUi?) {
                 Text(
                     text = "欢迎, ${account.userName}",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Color.Gray,
+                    color = MaterialTheme.colorScheme.outline,
                     modifier = Modifier
                         .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
                         .transformedHeight(this, transformationSpec)
@@ -556,8 +626,8 @@ internal fun HomeScreen(viewModel: AppViewModel, account: AccountUi?) {
 
         item {
             HomeListButton(
-                icon = Icons.AutoMirrored.Filled.QueueMusic,
-                label = "下载管理",
+                icon = Icons.Default.Download,
+                label = "已缓存音乐",
                 onClick = { viewModel.openDownloads() },
                 onLongClick = { viewModel.openListMenu(ListMenu.RootDownloads, "已缓存音乐") },
                 modifier = Modifier
@@ -569,7 +639,7 @@ internal fun HomeScreen(viewModel: AppViewModel, account: AccountUi?) {
 
         item {
             HomeListButton(
-                icon = Icons.Default.Refresh,
+                icon = Icons.Default.History,
                 label = "播放历史",
                 onClick = { viewModel.navigate(AppScreen.History) },
                 onLongClick = { viewModel.openListMenu(ListMenu.RootHistory, "播放历史") },
@@ -686,15 +756,15 @@ private fun MiniPlayerCard(
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = item.name,
-                    fontSize = 12.sp,
-                    color = Color.White,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onBackground,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
                     text = item.artistText,
-                    fontSize = 9.sp,
-                    color = Color.Gray,
+                    style = MaterialTheme.typography.bodyExtraSmall,
+                    color = MaterialTheme.colorScheme.outline,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -711,7 +781,7 @@ private fun MiniPlayerCard(
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.QueueMusic,
                 contentDescription = Copy.MORE + "队列",
-                tint = Color(0xFF8A93A5),
+                tint = MaterialTheme.colorScheme.outlineVariant,
                 modifier = Modifier
                     .size(22.dp)
                     .clickable(onClick = onQueue)
@@ -719,6 +789,8 @@ private fun MiniPlayerCard(
         }
         if (isCurrent && durationMs > 0) {
             Spacer(modifier = Modifier.height(4.dp))
+            // 发丝级进度条（2dp）：M3 LinearProgressIndicator 最小描边 8dp（含端点圆点），
+            // 不适配 MiniPlayer 紧凑行高，故保留细线；圆环进度均已用 M3 CircularProgressIndicator。
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -758,7 +830,7 @@ private fun CacheBadge(
         cached -> Box(
             modifier = modifier
                 .size(10.dp)
-                .background(Color(0xFF7BD88F), CircleShape),
+                .background(StatusGreen, CircleShape),
             contentAlignment = Alignment.Center
         ) {
             CachedTick()
@@ -768,15 +840,25 @@ private fun CacheBadge(
 
 @Composable
 private fun OfflineCacheBadge(cached: Boolean, modifier: Modifier = Modifier) {
-    Box(modifier = modifier.size(11.dp).background(if (cached) Color(0xFF7BD88F) else Color(0xFFE05A5A), CircleShape), contentAlignment = Alignment.Center) {
-        Text(if (cached) "✓" else "✗", fontSize = 7.sp, color = Color.Black, fontWeight = FontWeight.Bold)
+    Box(modifier = modifier.size(11.dp).background(if (cached) StatusGreen else StatusRed, CircleShape), contentAlignment = Alignment.Center) {
+        Icon(
+            if (cached) Icons.Default.Check else Icons.Default.Close,
+            contentDescription = null,
+            modifier = Modifier.size(8.dp),
+            tint = MaterialTheme.colorScheme.background
+        )
     }
 }
 
 /** 已缓存小圆标（统一角标图案）。 */
 @Composable
 internal fun CachedTick() {
-    Text(text = "✓", fontSize = 7.sp, color = Color.Black, fontWeight = FontWeight.Bold)
+    Icon(
+        Icons.Default.Check,
+        contentDescription = null,
+        modifier = Modifier.size(8.dp),
+        tint = MaterialTheme.colorScheme.background
+    )
 }
 
 @Composable
@@ -855,7 +937,7 @@ internal fun LibraryScreen(viewModel: AppViewModel, screen: AppScreen.Library) {
                             .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
                             .transformedHeight(this, transformationSpec)
                     ) {
-                        Text(text = lib.error, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                        Text(text = lib.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
                         Spacer(Modifier.height(8.dp))
                         Button(onClick = { viewModel.retryLibrary(screen.query) }) {
                             Text("重试")
@@ -1051,7 +1133,10 @@ private fun AlphabetListScaffold(
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
     val isRound = LocalContext.current.resources.configuration.isScreenRound
-    val listScale by animateFloatAsState(targetValue = if (scrubbing) 0.82f else 1f)
+    val listScale by animateFloatAsState(
+        targetValue = if (scrubbing) 0.82f else 1f,
+        animationSpec = spring(dampingRatio = 0.9f, stiffness = 500f)
+    )
 
     // 字母分组首索引：letter -> items 中第一个该字母条目的下标
     val groupFirst = remember(items) {
@@ -1125,7 +1210,10 @@ private fun AlphabetListScaffold(
                 } ?: -1
                 val shownLetterIdx = if (scrubbing) activeLetterIdx else scrollLetterIdx
                 // Active window shows the selected letter and up to three neighbors on either side.
-                val ringSpanF by animateFloatAsState(if (scrubbing) 3f else 1f)
+                val ringSpanF by animateFloatAsState(
+                    if (scrubbing) 3f else 1f,
+                    animationSpec = spring(dampingRatio = 0.9f, stiffness = 500f)
+                )
                 val ringSpan = ringSpanF.toInt()
                 if (shownLetterIdx >= 0) {
                     val stepDeg = if (scrubbing) 10f else 14f
@@ -1142,13 +1230,17 @@ private fun AlphabetListScaffold(
                             isCenter -> 17f
                             else -> 12f
                         }
-                        val fontSize by animateFloatAsState(targetSize)
+                        val fontSize by animateFloatAsState(
+                            targetSize,
+                            animationSpec = spring(dampingRatio = 0.9f, stiffness = 500f)
+                        )
                         val alpha by animateFloatAsState(
                             when {
                                 isCenter -> 1f
                                 scrubbing && abs(role) == 2 -> 0.45f
                                 else -> 0.6f
-                            }
+                            },
+                            animationSpec = spring(dampingRatio = 0.9f, stiffness = 500f)
                         )
                         val theta = Math.toRadians((role * stepDeg).toDouble())
                         val arcY = cy + radius * sin(theta).toFloat()
@@ -1179,7 +1271,7 @@ private fun AlphabetListScaffold(
                                     text = l,
                                     fontSize = fontSize.sp,
                                     fontWeight = if (isCenter) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (isCenter) Color.White else Color(0xFF9DB8E8),
+                                    color = if (isCenter) MaterialTheme.colorScheme.onBackground else Color(0xFF9DB8E8),
                                     textAlign = TextAlign.Center,
                                     modifier = Modifier.graphicsLayer { this.alpha = alpha }
                                 )
@@ -1285,7 +1377,7 @@ internal const val LIST_END_PADDING_DP = 26
 @Composable
 private fun FadingEdgeText(
     text: String,
-    fontSize: TextUnit,
+    style: TextStyle,
     color: Color,
     fadeColor: Color,
     modifier: Modifier = Modifier,
@@ -1295,7 +1387,7 @@ private fun FadingEdgeText(
     Box(modifier) {
         Text(
             text = text,
-            fontSize = fontSize,
+            style = style,
             fontWeight = fontWeight,
             color = color,
             maxLines = 1,
@@ -1308,7 +1400,7 @@ private fun FadingEdgeText(
                 Modifier
                     .align(Alignment.CenterEnd)
                     .width(20.dp)
-                    .height(fontSize.value.dp * 1.4f)
+                    .height(style.fontSize.value.dp * 1.4f)
                     .background(Brush.horizontalGradient(listOf(Color.Transparent, fadeColor)))
             )
         }
@@ -1418,24 +1510,24 @@ internal fun LibraryItemRow(
             if (selectionMode) {
                 Text(
                     if (selected) "✓" else "○",
-                    fontSize = 18.sp,
-                    color = if (selected) MaterialTheme.colorScheme.onPrimary else Color.LightGray
+                    style = MaterialTheme.typography.titleLarge,
+                    color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.width(6.dp))
             }
             Column(modifier = Modifier.weight(1f)) {
                 FadingEdgeText(
                     text = item.name,
-                    fontSize = 13.sp,
+                    style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Bold,
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onBackground,
                     fadeColor = rowBg
                 )
                 if (query.kind != LibraryKind.ARTISTS) {
                     FadingEdgeText(
                         text = item.artistText,
-                        fontSize = 9.sp,
-                        color = Color(0xFF8A93A5),
+                        style = MaterialTheme.typography.bodyExtraSmall,
+                        color = MaterialTheme.colorScheme.outlineVariant,
                         fadeColor = rowBg
                     )
                 }
@@ -1444,7 +1536,7 @@ internal fun LibraryItemRow(
                 Icon(
                     imageVector = Icons.Default.Delete,
                     contentDescription = "移除",
-                    tint = Color.Gray,
+                    tint = MaterialTheme.colorScheme.outline,
                     modifier = Modifier.size(24.dp).clickable(onClick = trailingAction)
                 )
             }
@@ -1456,7 +1548,7 @@ internal fun LibraryItemRow(
  * 行级左滑手势（MT 管理器式多选入口）：
  * - 单击：位移 < touchSlop 且未判定为拖拽，交给 combinedClickable 处理。
  * - 左滑：|dx| ≥ max(2×touchSlop, 20dp)、dx<0 且 |dx| ≥ 2|dy| 时立即触发 onSwipeLeft，
- *   并消费本手势后续全部事件（防止 ScalingLazyColumn 滚动 / SwipeToDismissBox 抢走）。
+ *   并消费本手势后续全部事件（防止 TransformingLazyColumn 滚动 / SwipeToDismissBox 抢走）。
  * - 纵向意图（|dy|>|dx|）不消费任何事件，交还列表滚动；右滑放行给系统返回。
  * - 短于阈值的横向拖拽在抬起时消费事件，避免被误判为单击播放。
  */
@@ -1525,12 +1617,12 @@ private fun MultiSelectBar(
             modifier = Modifier.height(30.dp),
             colors = solidButtonColors(Color(0xFF4A5568))
         ) {
-            Text(Copy.EXIT_SELECTION, fontSize = 10.sp, color = Color.White, maxLines = 1)
+            Text(Copy.EXIT_SELECTION, style = MaterialTheme.typography.bodyExtraSmall, color = MaterialTheme.colorScheme.onBackground, maxLines = 1)
         }
         Text(
             text = Copy.selectedCount(selectedCount),
-            fontSize = 11.sp,
-            color = Color.White,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onBackground,
             textAlign = TextAlign.Center,
             maxLines = 1,
             modifier = Modifier.weight(1f)
@@ -1540,7 +1632,7 @@ private fun MultiSelectBar(
             modifier = Modifier.height(30.dp),
             colors = solidButtonColors(Color(0xFF22304A))
         ) {
-            Text(Copy.MORE, fontSize = 10.sp, color = Color.White, maxLines = 1)
+            Text(Copy.MORE, style = MaterialTheme.typography.bodyExtraSmall, color = MaterialTheme.colorScheme.onBackground, maxLines = 1)
         }
     }
 }
@@ -1589,8 +1681,8 @@ internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.Batch
         item {
             Text(
                 text = Copy.selectedCount(uiState.selectedSongIds.size),
-                fontSize = 11.sp,
-                color = Color.Gray,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline,
                 modifier = Modifier
                     .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
                     .transformedHeight(this, transformationSpec)
@@ -1609,7 +1701,7 @@ internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.Batch
                     colors = ButtonDefaults.buttonColors(),
                     transformation = SurfaceTransformation(transformationSpec)
                 ) {
-                    Text(Copy.ADD_TO_QUEUE, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(Copy.ADD_TO_QUEUE, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
@@ -1626,7 +1718,7 @@ internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.Batch
                     colors = solidButtonColors(Color(0xFF4A5568)),
                     transformation = SurfaceTransformation(transformationSpec)
                 ) {
-                    Text(Copy.cacheSelected(uiState.selectedSongIds.size), fontSize = 12.sp, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(Copy.cacheSelected(uiState.selectedSongIds.size), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
             item {
@@ -1641,7 +1733,7 @@ internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.Batch
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer, contentColor = MaterialTheme.colorScheme.onSurface),
                     transformation = SurfaceTransformation(transformationSpec)
                 ) {
-                    Text(Copy.PLAY_NEXT, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(Copy.PLAY_NEXT, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
             item {
@@ -1657,7 +1749,7 @@ internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.Batch
                     colors = solidButtonColors(Color(0xFF4A5568)),
                     transformation = SurfaceTransformation(transformationSpec)
                 ) {
-                    Text(Copy.DELETE_SELECTED_CACHES, fontSize = 12.sp, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(Copy.DELETE_SELECTED_CACHES, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
@@ -1674,7 +1766,7 @@ internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.Batch
                     colors = solidButtonColors(Color(0xFF4A5568)),
                     transformation = SurfaceTransformation(transformationSpec)
                 ) {
-                    Text("从队列移除", fontSize = 12.sp, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("从队列移除", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
@@ -1692,7 +1784,7 @@ internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.Batch
                     colors = solidButtonColors(Color(0xFF4A5568)),
                     transformation = SurfaceTransformation(transformationSpec)
                 ) {
-                    Text(Copy.REMOVE_FROM_LIST, fontSize = 12.sp, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(Copy.REMOVE_FROM_LIST, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
@@ -1705,7 +1797,7 @@ internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.Batch
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer, contentColor = MaterialTheme.colorScheme.onSurface),
                 transformation = SurfaceTransformation(transformationSpec)
             ) {
-                Text(Copy.SHARE, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(Copy.SHARE, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
         item {
@@ -1717,7 +1809,7 @@ internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.Batch
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer, contentColor = MaterialTheme.colorScheme.onSurface),
                 transformation = SurfaceTransformation(transformationSpec)
             ) {
-                Text(Copy.SELECT_ALL, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(Copy.SELECT_ALL, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
         item {
@@ -1732,7 +1824,7 @@ internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.Batch
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer, contentColor = MaterialTheme.colorScheme.onSurface),
                 transformation = SurfaceTransformation(transformationSpec)
             ) {
-                Text(Copy.SELECT_NONE, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(Copy.SELECT_NONE, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
         item {
@@ -1748,7 +1840,7 @@ internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.Batch
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer, contentColor = MaterialTheme.colorScheme.onSurface),
                 transformation = SurfaceTransformation(transformationSpec)
             ) {
-                Text(Copy.INVERT_SELECTION, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(Copy.INVERT_SELECTION, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
         item {
@@ -1760,7 +1852,7 @@ internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.Batch
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer, contentColor = MaterialTheme.colorScheme.onSurface),
                 transformation = SurfaceTransformation(transformationSpec)
             ) {
-                Text("返回", fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("返回", style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }
@@ -1801,8 +1893,8 @@ internal fun ListActionsScreen(viewModel: AppViewModel, screen: AppScreen.ListAc
         items(screen.menu.items()) { entry ->
             val (background, textColor) = when (entry.action) {
                 ListMenuAction.PLAY_ALL -> null to null
-                ListMenuAction.CACHE_ALL -> Color(0xFF4A5568) to Color.White
-                ListMenuAction.DELETE_CACHES -> Color(0xFF4A1515) to Color.White
+                ListMenuAction.CACHE_ALL -> Color(0xFF4A5568) to MaterialTheme.colorScheme.onBackground
+                ListMenuAction.DELETE_CACHES -> Color(0xFF4A1515) to MaterialTheme.colorScheme.onBackground
                 else -> null to null
             }
             Button(
@@ -1822,12 +1914,12 @@ internal fun ListActionsScreen(viewModel: AppViewModel, screen: AppScreen.ListAc
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.Shuffle, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text(entry.label, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(entry.label, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 } else {
                     Text(
                         entry.label,
-                        fontSize = 12.sp,
+                        style = MaterialTheme.typography.labelSmall,
                         color = textColor ?: Color.Unspecified,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -1844,7 +1936,7 @@ internal fun ListActionsScreen(viewModel: AppViewModel, screen: AppScreen.ListAc
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer, contentColor = MaterialTheme.colorScheme.onSurface),
                 transformation = SurfaceTransformation(transformationSpec)
             ) {
-                Text("取消", fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("取消", style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }
@@ -1893,11 +1985,11 @@ private fun SongInfoRow(label: String, value: String, modifier: Modifier = Modif
             .background(MaterialTheme.colorScheme.background)
             .padding(horizontal = 10.dp, vertical = 6.dp)
     ) {
-        Text(text = label, fontSize = 9.sp, color = Color(0xFF8A93A5))
+        Text(text = label, style = MaterialTheme.typography.bodyExtraSmall, color = MaterialTheme.colorScheme.outlineVariant)
         Text(
             text = value,
-            fontSize = 11.sp,
-            color = Color.White,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onBackground,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis
         )
@@ -1955,7 +2047,7 @@ internal fun TrackDetailScreen(viewModel: AppViewModel, item: JellyfinItem, sour
             Text(
                 text = item.artistText,
                 style = MaterialTheme.typography.labelMedium,
-                color = Color.Gray,
+                color = MaterialTheme.colorScheme.outline,
                 textAlign = TextAlign.Center,
                 modifier = Modifier
                     .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
@@ -2056,14 +2148,14 @@ internal fun TrackDetailScreen(viewModel: AppViewModel, item: JellyfinItem, sour
                             val quality = progress.qualityLabel.takeIf { it.isNotBlank() }?.let { "$it · " } ?: ""
                             Text(
                                 text = "${quality}${prefix}${(fraction * 100).toInt()}% · ${formatBytes(progress.downloadedBytes)}" + (if (progress.totalBytes > 0) " / ${formatBytes(progress.totalBytes)}" else ""),
-                                fontSize = 10.sp
+                                style = MaterialTheme.typography.bodyExtraSmall
                             )
                         } else {
                             CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                             val quality = progress?.qualityLabel?.takeIf { it.isNotBlank() }?.let { "$it · " } ?: ""
                             Text(
                                 text = "${quality}已缓存 ${formatBytes(progress?.downloadedBytes ?: 0L)}",
-                                fontSize = 10.sp
+                                style = MaterialTheme.typography.bodyExtraSmall
                             )
                         }
                     }
@@ -2083,7 +2175,7 @@ internal fun TrackDetailScreen(viewModel: AppViewModel, item: JellyfinItem, sour
                     colors = solidButtonColors(Color(0xFF4A5568)),
                     transformation = SurfaceTransformation(transformationSpec)
                 ) {
-                    Text(Copy.DELETE_THIS_CACHE, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(Copy.DELETE_THIS_CACHE, color = MaterialTheme.colorScheme.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
@@ -2127,7 +2219,7 @@ internal fun TrackDetailScreen(viewModel: AppViewModel, item: JellyfinItem, sour
                     colors = solidButtonColors(Color(0xFF4A5568)),
                     transformation = SurfaceTransformation(transformationSpec)
                 ) {
-                    Text(Copy.REMOVE_FROM_LIST, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(Copy.REMOVE_FROM_LIST, color = MaterialTheme.colorScheme.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
@@ -2187,7 +2279,7 @@ internal fun PlayerScreen(viewModel: AppViewModel) {
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
-                    Icon(Icons.Default.MusicNote, contentDescription = null, modifier = Modifier.size(40.dp), tint = Color.Gray)
+                    Icon(Icons.Default.MusicNote, contentDescription = null, modifier = Modifier.size(40.dp), tint = MaterialTheme.colorScheme.outline)
                 }
             }
         }
@@ -2209,7 +2301,7 @@ internal fun PlayerScreen(viewModel: AppViewModel) {
                 Text(
                     text = item?.artistText ?: "Jellyfin",
                     style = MaterialTheme.typography.labelSmall,
-                    color = Color.Gray,
+                    color = MaterialTheme.colorScheme.outline,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.Center
@@ -2218,7 +2310,7 @@ internal fun PlayerScreen(viewModel: AppViewModel) {
                     Box(
                         modifier = Modifier
                             .size(12.dp)
-                            .background(Color(0xFF7BD88F), CircleShape),
+                            .background(StatusGreen, CircleShape),
                         contentAlignment = Alignment.Center
                     ) {
                         CachedTick()
@@ -2237,7 +2329,7 @@ internal fun PlayerScreen(viewModel: AppViewModel) {
                 ) {
                     CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
                     Spacer(Modifier.width(8.dp))
-                    Text("正在缓冲音乐...", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
+                    Text("正在缓冲音乐...", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelSmall)
                 }
             }
         }
@@ -2247,7 +2339,7 @@ internal fun PlayerScreen(viewModel: AppViewModel) {
                 Text(
                     text = pbState.error ?: "播放失败",
                     color = MaterialTheme.colorScheme.error,
-                    fontSize = 11.sp,
+                    style = MaterialTheme.typography.labelSmall,
                     textAlign = TextAlign.Center,
                     modifier = Modifier
                         .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
@@ -2284,7 +2376,7 @@ internal fun PlayerScreen(viewModel: AppViewModel) {
                     modifier = Modifier.size(36.dp),
                     colors = solidButtonColors(Color(0xFF4A5568))
                 ) {
-                    Icon(Icons.Default.SkipPrevious, contentDescription = null, modifier = Modifier.size(20.dp), tint = Color.White)
+                    Icon(Icons.Default.SkipPrevious, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onBackground)
                 }
 
                 Spacer(modifier = Modifier.width(12.dp))
@@ -2320,7 +2412,7 @@ internal fun PlayerScreen(viewModel: AppViewModel) {
                     modifier = Modifier.size(36.dp),
                     colors = solidButtonColors(Color(0xFF4A5568))
                 ) {
-                    Icon(Icons.Default.SkipNext, contentDescription = null, modifier = Modifier.size(20.dp), tint = Color.White)
+                    Icon(Icons.Default.SkipNext, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onBackground)
                 }
             }
         }
@@ -2342,7 +2434,7 @@ internal fun PlayerScreen(viewModel: AppViewModel) {
                         modifier = Modifier.size(36.dp),
                         colors = solidButtonColors(Color(0xFF3A3F4B))
                     ) {
-                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = "减小音量", modifier = Modifier.size(20.dp), tint = Color.White)
+                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = "减小音量", modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onBackground)
                     }
                     Spacer(modifier = Modifier.width(10.dp))
                     Button(
@@ -2350,7 +2442,7 @@ internal fun PlayerScreen(viewModel: AppViewModel) {
                         modifier = Modifier.size(36.dp),
                         colors = if (pbState.shuffleEnabled) ButtonDefaults.buttonColors() else solidButtonColors(Color(0xFF3A3F4B))
                     ) {
-                        Icon(Icons.Default.Shuffle, contentDescription = null, modifier = Modifier.size(18.dp), tint = if (pbState.shuffleEnabled) MaterialTheme.colorScheme.onPrimary else Color.White)
+                        Icon(Icons.Default.Shuffle, contentDescription = null, modifier = Modifier.size(18.dp), tint = if (pbState.shuffleEnabled) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onBackground)
                     }
                     Spacer(modifier = Modifier.width(10.dp))
                     Button(
@@ -2359,7 +2451,7 @@ internal fun PlayerScreen(viewModel: AppViewModel) {
                         colors = if (pbState.repeatMode != Player.REPEAT_MODE_OFF) ButtonDefaults.buttonColors() else solidButtonColors(Color(0xFF3A3F4B))
                     ) {
                         val icon = if (pbState.repeatMode == Player.REPEAT_MODE_ONE) Icons.Default.RepeatOne else Icons.Default.Repeat
-                        Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp), tint = if (pbState.repeatMode != Player.REPEAT_MODE_OFF) MaterialTheme.colorScheme.onPrimary else Color.White)
+                        Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp), tint = if (pbState.repeatMode != Player.REPEAT_MODE_OFF) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onBackground)
                     }
                     Spacer(modifier = Modifier.width(10.dp))
                     Button(
@@ -2367,14 +2459,14 @@ internal fun PlayerScreen(viewModel: AppViewModel) {
                         modifier = Modifier.size(36.dp),
                         colors = solidButtonColors(Color(0xFF3A3F4B))
                     ) {
-                        Icon(Icons.Default.KeyboardArrowUp, contentDescription = "增大音量", modifier = Modifier.size(20.dp), tint = Color.White)
+                        Icon(Icons.Default.KeyboardArrowUp, contentDescription = "增大音量", modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onBackground)
                     }
                 }
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = "音量 ${pbState.volumePercent.coerceIn(0, 100)}%",
-                    fontSize = 9.sp,
-                    color = Color.LightGray
+                    style = MaterialTheme.typography.bodyExtraSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
@@ -2389,7 +2481,7 @@ internal fun PlayerScreen(viewModel: AppViewModel) {
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer, contentColor = MaterialTheme.colorScheme.onSurface),
                 transformation = SurfaceTransformation(transformationSpec)
             ) {
-                Text("队列 (${pbState.queue.size})", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("队列 (${pbState.queue.size})", style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
 
@@ -2452,7 +2544,7 @@ internal fun QueueScreen(viewModel: AppViewModel) {
                 colors = solidButtonColors(Color(0xFF4A1515)),
                 transformation = SurfaceTransformation(transformationSpec)
             ) {
-                Text("清空队列", fontSize = 12.sp, color = Color.White)
+                Text("清空队列", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onBackground)
             }
         }
 
@@ -2460,7 +2552,7 @@ internal fun QueueScreen(viewModel: AppViewModel) {
             item {
                 Text(
                     "队列为空",
-                    color = Color.Gray,
+                    color = MaterialTheme.colorScheme.outline,
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier
                         .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
@@ -2479,8 +2571,8 @@ internal fun QueueScreen(viewModel: AppViewModel) {
                 ) {
                     Text(
                         text = "${index + 1}.",
-                        fontSize = 11.sp,
-                        color = if (index == pbState.currentIndex) MaterialTheme.colorScheme.primary else Color.Gray,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (index == pbState.currentIndex) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
                         modifier = Modifier.width(24.dp)
                     )
                     LibraryItemRow(
@@ -2571,7 +2663,7 @@ internal fun DownloadsScreen(viewModel: AppViewModel) {
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         item {
-            Text("下载管理", style = MaterialTheme.typography.titleSmall,
+            Text("已缓存音乐", style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.primary, modifier = Modifier
                     .padding(top = 12.dp)
                     .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
@@ -2580,7 +2672,7 @@ internal fun DownloadsScreen(viewModel: AppViewModel) {
         if (queue.isNotEmpty()) {
             item {
                 Text("缓存队列 (${queue.size}) " + if (sectionExpanded) "▲" else "▼",
-                    fontSize = 11.sp, color = Color(0xFF8A93A5), textAlign = TextAlign.Center,
+                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outlineVariant, textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth().clickable { sectionExpanded = !sectionExpanded }.padding(vertical = 4.dp)
                         .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
                         .transformedHeight(this, transformationSpec))
@@ -2594,12 +2686,12 @@ internal fun DownloadsScreen(viewModel: AppViewModel) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             when (entry.status) {
                                 dev.wearjelly.data.DownloadStatus.RUNNING -> CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 2.dp)
-                                dev.wearjelly.data.DownloadStatus.DONE -> Text("✓", color = Color(0xFF7BD88F), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                dev.wearjelly.data.DownloadStatus.FAILED -> Text("✗", color = MaterialTheme.colorScheme.error, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                dev.wearjelly.data.DownloadStatus.WAITING -> Text("…", color = Color(0xFF8A93A5), fontSize = 12.sp)
+                                dev.wearjelly.data.DownloadStatus.DONE -> Text("✓", color = StatusGreen, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                                dev.wearjelly.data.DownloadStatus.FAILED -> Text("✗", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                                dev.wearjelly.data.DownloadStatus.WAITING -> Text("…", color = MaterialTheme.colorScheme.outlineVariant, style = MaterialTheme.typography.labelSmall)
                             }
                             Spacer(Modifier.width(6.dp))
-                            FadingEdgeText(entry.itemName, fontSize = 11.sp, color = Color.White,
+                            FadingEdgeText(entry.itemName, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onBackground,
                                 fadeColor = Color(0xFF14202F), modifier = Modifier.weight(1f))
                         }
                         if (entry.status == dev.wearjelly.data.DownloadStatus.RUNNING) {
@@ -2607,12 +2699,12 @@ internal fun DownloadsScreen(viewModel: AppViewModel) {
                             if (fraction != null) {
                                 Spacer(Modifier.height(3.dp))
                                 Box(Modifier.fillMaxWidth().height(4.dp).background(Color.DarkGray)) { Box(Modifier.fillMaxWidth(fraction.coerceIn(0f, 1f)).fillMaxHeight().background(MaterialTheme.colorScheme.primary)) }
-                                Text("${entry.qualityLabel} · ${(fraction * 100).toInt()}% · ${formatBytes(entry.downloadedBytes)}", fontSize = 9.sp, color = Color.LightGray)
+                                Text("${entry.qualityLabel} · ${(fraction * 100).toInt()}% · ${formatBytes(entry.downloadedBytes)}", style = MaterialTheme.typography.bodyExtraSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         } else if (entry.status == dev.wearjelly.data.DownloadStatus.WAITING) {
-                            Text("排队中 · ${entry.qualityLabel}", fontSize = 9.sp, color = Color(0xFF8A93A5))
+                            Text("排队中 · ${entry.qualityLabel}", style = MaterialTheme.typography.bodyExtraSmall, color = MaterialTheme.colorScheme.outlineVariant)
                         } else if (entry.status == dev.wearjelly.data.DownloadStatus.FAILED) {
-                            Text("缓存失败，请检查网络后重试", fontSize = 9.sp, color = Color(0xFF8A93A5))
+                            Text("缓存失败，请检查网络后重试", style = MaterialTheme.typography.bodyExtraSmall, color = MaterialTheme.colorScheme.outlineVariant)
                         }
                     }
                 }
@@ -2622,8 +2714,8 @@ internal fun DownloadsScreen(viewModel: AppViewModel) {
             item {
                 Text(
                     if (offline) "暂无歌曲元数据" else "暂无下载记录",
-                    color = Color.Gray,
-                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.outline,
+                    style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier
                         .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
                         .transformedHeight(this, transformationSpec)
@@ -2716,8 +2808,8 @@ internal fun HistoryScreen(viewModel: AppViewModel) {
             item {
                 Text(
                     "暂无播放记录",
-                    color = Color.Gray,
-                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.outline,
+                    style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier
                         .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
                         .transformedHeight(this, transformationSpec)
@@ -2801,11 +2893,11 @@ internal fun SettingsScreen(viewModel: AppViewModel, account: AccountUi?) {
                         .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
                         .transformedHeight(this, transformationSpec)
                 ) {
-                    Text("当前用户", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                    Text("当前用户", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
                     Text(account.userName, style = MaterialTheme.typography.bodyMedium)
                     Spacer(Modifier.height(4.dp))
-                    Text("服务器", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                    Text(account.serverUrl, style = MaterialTheme.typography.labelSmall, color = Color.LightGray, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("服务器", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                    Text(account.serverUrl, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
@@ -2814,7 +2906,7 @@ internal fun SettingsScreen(viewModel: AppViewModel, account: AccountUi?) {
             Text(
                 text = "在线播放音质",
                 style = MaterialTheme.typography.labelMedium,
-                color = Color.LightGray,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier
                     .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
                     .transformedHeight(this, transformationSpec)
@@ -2836,7 +2928,7 @@ internal fun SettingsScreen(viewModel: AppViewModel, account: AccountUi?) {
             ) {
                 Text(
                     text = if (currentBitrate == bitrate) "✓ ${bitrate.displayName}" else bitrate.displayName,
-                    fontSize = 11.sp,
+                    style = MaterialTheme.typography.labelSmall,
                     maxLines = 1
                 )
             }
@@ -2845,8 +2937,8 @@ internal fun SettingsScreen(viewModel: AppViewModel, account: AccountUi?) {
         item {
             Text(
                 text = "转码仅影响新开始的在线播放",
-                fontSize = 9.sp,
-                color = Color.Gray,
+                style = MaterialTheme.typography.bodyExtraSmall,
+                color = MaterialTheme.colorScheme.outline,
                 textAlign = TextAlign.Center,
                 modifier = Modifier
                     .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
@@ -2876,7 +2968,7 @@ internal fun SettingsScreen(viewModel: AppViewModel, account: AccountUi?) {
                 colors = solidButtonColors(Color(0xFF6B1B1B)),
                 transformation = SurfaceTransformation(transformationSpec)
             ) {
-                Text("退出登录", color = Color.White)
+                Text("退出登录", color = MaterialTheme.colorScheme.onBackground)
             }
         }
     }
