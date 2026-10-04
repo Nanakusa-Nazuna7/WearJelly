@@ -17,8 +17,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
-/** 同步进度：供 UI 显示“同步中/已完成/失败”，失败时保留上一次快照。 */
+private const val LYRICS_FETCH_TIMEOUT_MS = 1_500L
+
+
 sealed interface SyncState {
     data object Idle : SyncState
     data class Running(val playlistsDone: Int, val playlistsTotal: Int) : SyncState
@@ -46,6 +49,8 @@ class OfflineLibrarySync(
     private val loadSession: suspend () -> ServerSession?,
     private val fetchPlaylists: suspend (offset: Int, limit: Int) -> ItemPage,
     private val fetchPlaylistItems: suspend (playlistId: String, offset: Int, limit: Int) -> ItemPage,
+    private val fetchLyrics: suspend (itemId: String) -> dev.wearjelly.data.LyricsResult = { dev.wearjelly.data.LyricsResult.NotFound },
+    private val fetchAllTracks: suspend (offset: Int, limit: Int) -> ItemPage = { _, _ -> ItemPage(emptyList(), 0) },
     private val pageSize: Int = DEFAULT_PAGE_SIZE
 ) {
     constructor(
@@ -61,6 +66,8 @@ class OfflineLibrarySync(
         fetchPlaylistItems = { playlistId, offset, limit ->
             repository.getPlaylistItems(playlistId, startIndex = offset, limit = limit)
         },
+        fetchLyrics = { itemId -> repository.lyrics(itemId) },
+        fetchAllTracks = { offset, limit -> repository.getItems(LibraryKind.SONGS, startIndex = offset, limit = limit) },
         pageSize = pageSize
     )
 
@@ -83,12 +90,23 @@ class OfflineLibrarySync(
         val playlists = fetchAll { offset -> fetchPlaylists(offset, pageSize) }
         _state.value = SyncState.Running(0, playlists.size)
 
+        val allLibraryTracks = fetchAll { offset -> fetchAllTracks(offset, pageSize) }
         val snapshots = ArrayList<Pair<JellyfinItem, List<JellyfinItem>>>(playlists.size)
         playlists.forEachIndexed { index, playlist ->
             snapshots += playlist to fetchAll { offset ->
                 fetchPlaylistItems(playlist.id, offset, pageSize)
             }
             _state.value = SyncState.Running(index + 1, playlists.size)
+        }
+
+        val uniqueItems = (snapshots.flatMap { it.second } + allLibraryTracks).distinctBy { it.id }
+        val lyricsById = uniqueItems.associate { item ->
+            item.id to try {
+                withTimeoutOrNull(LYRICS_FETCH_TIMEOUT_MS) { fetchLyrics(item.id) }
+                    ?: dev.wearjelly.data.LyricsResult.Error("歌词请求超时")
+            } catch (error: Throwable) {
+                dev.wearjelly.data.LyricsResult.Error(error.message)
+            }
         }
 
         val now = System.currentTimeMillis()
@@ -119,6 +137,12 @@ class OfflineLibrarySync(
                 indexImage(serverKey, playlist.id, playlist.imageTags["Primary"])
                 val trackIds = items.map { item ->
                     database.tracks().upsert(item.toTrackEntity(serverKey))
+                    when (val lyrics = lyricsById[item.id]) {
+                        is dev.wearjelly.data.LyricsResult.Found -> database.lyrics().upsert(LyricsEntity(serverKey, item.id, lyricsJson = OfflineJson.encodeLyrics(lyrics.lyrics), isSynchronized = lyrics.lyrics.isSynchronized, state = "AVAILABLE", fetchedAtMs = now))
+                        dev.wearjelly.data.LyricsResult.NotFound -> database.lyrics().upsert(LyricsEntity(serverKey, item.id, state = "NOT_FOUND", fetchedAtMs = now))
+                        is dev.wearjelly.data.LyricsResult.Error -> database.lyrics().upsert(LyricsEntity(serverKey, item.id, state = "FAILED", fetchedAtMs = now, lastError = lyrics.message))
+                        null -> Unit
+                    }
                     upsertAlbumAndArtists(serverKey, item)
                     indexImages(serverKey, item)
                     item.id
@@ -126,9 +150,21 @@ class OfflineLibrarySync(
                 database.playlistTracks().replaceSnapshot(serverKey, playlist.id, trackIds)
                 trackCount += trackIds.size
             }
+            val playlistTrackIds = snapshots.flatMap { it.second }.map { it.id }.toSet()
+            allLibraryTracks.filter { it.id !in playlistTrackIds }.forEach { item ->
+                database.tracks().upsert(item.toTrackEntity(serverKey))
+                when (val lyrics = lyricsById[item.id]) {
+                    is dev.wearjelly.data.LyricsResult.Found -> database.lyrics().upsert(LyricsEntity(serverKey, item.id, lyricsJson = OfflineJson.encodeLyrics(lyrics.lyrics), isSynchronized = lyrics.lyrics.isSynchronized, state = "AVAILABLE", fetchedAtMs = now))
+                    dev.wearjelly.data.LyricsResult.NotFound -> database.lyrics().upsert(LyricsEntity(serverKey, item.id, state = "NOT_FOUND", fetchedAtMs = now))
+                    is dev.wearjelly.data.LyricsResult.Error -> database.lyrics().upsert(LyricsEntity(serverKey, item.id, state = "FAILED", fetchedAtMs = now, lastError = lyrics.message))
+                    null -> Unit
+                }
+                upsertAlbumAndArtists(serverKey, item)
+                indexImages(serverKey, item)
+            }
         }
 
-        val result = SyncResult(serverKey, playlists.size, trackCount, now)
+        val result = SyncResult(serverKey, playlists.size, trackCount + allLibraryTracks.count { item -> snapshots.none { snapshot -> snapshot.second.any { it.id == item.id } } }, now)
         _state.value = SyncState.Completed(result)
         return result
     }

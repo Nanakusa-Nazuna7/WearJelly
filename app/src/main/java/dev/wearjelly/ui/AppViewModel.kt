@@ -131,6 +131,10 @@ class AppViewModel(
     val lastPlayback: StateFlow<dev.wearjelly.data.LastPlayback?> = lastPlaybackStore.lastPlayback
     val cachedTrackIds: StateFlow<Set<String>> = downloadManager.cachedTrackIds
     val offlineSyncState: StateFlow<SyncState> = offlineSync.state
+    private val _downloadManagementItems = MutableStateFlow<List<JellyfinItem>>(emptyList())
+    internal val downloadManagementItems: StateFlow<List<JellyfinItem>> = _downloadManagementItems.asStateFlow()
+    internal val isOfflineMode: Boolean get() = offlineMode
+    private var downloadManagementJob: Job? = null
     private var offlineMode = false
     private val mutableUi = MutableStateFlow(AppUiState())
     internal val uiState = mutableUi.asStateFlow()
@@ -248,6 +252,18 @@ class AppViewModel(
     internal fun cancelLogin() {
         loginJob?.cancel()
         mutableUi.update { it.copy(login = it.login.copy(submitting = false, password = "", error = null)) }
+    }
+
+    internal fun openDownloads() {
+        navigate(AppScreen.Downloads)
+        downloadManagementJob?.cancel()
+        downloadManagementJob = viewModelScope.launch {
+            _downloadManagementItems.value = if (offlineMode) {
+                offlineReader.page(LibraryKind.SONGS, null, null, null, 0, Int.MAX_VALUE).items
+            } else {
+                downloadedSongs.value.map { it.item }
+            }
+        }
     }
 
     internal fun openLibrary(kind: LibraryKind) {
@@ -873,9 +889,19 @@ class AppViewModel(
         }
     }
 
+    private fun applyLyricsResult(generationAtRequest: Long, itemId: String, result: dev.wearjelly.data.LyricsResult) {
+        if (generationAtRequest != generation || playback.state.value.current?.id != itemId) return
+        mutableUi.update { state ->
+            when (result) {
+                is dev.wearjelly.data.LyricsResult.Found -> state.copy(lyrics = LyricsUi(itemId = itemId, loaded = true, lyrics = result.lyrics))
+                dev.wearjelly.data.LyricsResult.NotFound -> state.copy(lyrics = LyricsUi(itemId = itemId, loaded = true, notFound = true))
+                is dev.wearjelly.data.LyricsResult.Error -> state.copy(lyrics = LyricsUi(itemId = itemId, error = result.message ?: "歌词加载失败"))
+            }
+        }
+    }
     internal fun loadLyrics(force: Boolean = false) {
         val itemId = playback.state.value.current?.id ?: return
-        if (repository.session.value == null) return
+        if (repository.session.value == null && !offlineMode) return
         val old = mutableUi.value.lyrics
         if (!force && old.itemId == itemId && (old.loading || old.loaded || old.error != null)) return
         lyricsJob?.cancel()
@@ -883,24 +909,19 @@ class AppViewModel(
         mutableUi.update { it.copy(lyrics = LyricsUi(itemId = itemId, loading = true)) }
         lyricsJob = viewModelScope.launch {
             try {
+                val local = offlineReader.lyrics(itemId)
+                if (local is dev.wearjelly.data.LyricsResult.Found || local is dev.wearjelly.data.LyricsResult.NotFound || offlineMode) {
+                    applyLyricsResult(requestGeneration, itemId, local)
+                    return@launch
+                }
                 when (val result = repository.lyrics(itemId)) {
                     is dev.wearjelly.data.LyricsResult.Found -> {
-                        if (requestGeneration != generation || playback.state.value.current?.id != itemId) return@launch
-                        mutableUi.update {
-                            it.copy(lyrics = LyricsUi(itemId = itemId, loaded = true, lyrics = result.lyrics))
-                        }
+                        applyLyricsResult(requestGeneration, itemId, result)
                     }
-                    dev.wearjelly.data.LyricsResult.NotFound -> {
-                        if (requestGeneration != generation || playback.state.value.current?.id != itemId) return@launch
-                        mutableUi.update {
-                            it.copy(lyrics = LyricsUi(itemId = itemId, loaded = true, notFound = true))
-                        }
-                    }
+                    dev.wearjelly.data.LyricsResult.NotFound -> applyLyricsResult(requestGeneration, itemId, result)
                     is dev.wearjelly.data.LyricsResult.Error -> {
                         if (requestGeneration == generation && playback.state.value.current?.id == itemId) {
-                            mutableUi.update {
-                                it.copy(lyrics = LyricsUi(itemId = itemId, error = result.message ?: "歌词加载失败"))
-                            }
+                            mutableUi.update { it.copy(lyrics = LyricsUi(itemId = itemId, error = result.message ?: "歌词加载失败")) }
                         }
                     }
                 }

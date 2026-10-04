@@ -67,7 +67,15 @@ class OfflineSyncRepositoryTest {
         repository.login(server.url("/jellyfin").toString(), "tester", "pw")
     }
 
-    private fun sync(pageSize: Int = 100) = OfflineLibrarySync(repository, database, pageSize)
+    private fun sync(pageSize: Int = 100) = OfflineLibrarySync(
+        database = database,
+        loadSession = { repository.session.value },
+        fetchPlaylists = { offset, limit -> repository.getItems(dev.wearjelly.data.LibraryKind.PLAYLISTS, startIndex = offset, limit = limit) },
+        fetchPlaylistItems = { playlistId, offset, limit -> repository.getPlaylistItems(playlistId, startIndex = offset, limit = limit) },
+        fetchLyrics = { dev.wearjelly.data.LyricsResult.NotFound },
+        fetchAllTracks = { _, _ -> dev.wearjelly.data.ItemPage(emptyList(), 0) },
+        pageSize = pageSize
+    )
 
     private fun key(): String {
         val session = repository.session.value ?: error("未登录")

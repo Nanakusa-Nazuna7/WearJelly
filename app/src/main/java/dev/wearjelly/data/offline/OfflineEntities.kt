@@ -27,10 +27,31 @@ data class TrackEntity(
     val durationTicks: Long?,
     val container: String?,
     val metadataJson: String,
+    val composerText: String = "",
+    val lyricistText: String = "",
+    val genreJson: String = "[]",
+    val overview: String? = null,
+    val productionYear: Int? = null,
+    val premiereDate: String? = null,
+    val sortName: String? = null,
+    val bitrate: Int? = null,
+    val mediaSourceJson: String = "[]",
     val localAudioPath: String? = null,
     val localCoverPath: String? = null,
     val downloadedTimeMs: Long? = null,
     val qualityLabel: String? = null
+)
+
+@Entity(primaryKeys = ["serverKey", "itemId", "language"])
+data class LyricsEntity(
+    val serverKey: String,
+    val itemId: String,
+    val language: String = "default",
+    val lyricsJson: String = "{}",
+    val isSynchronized: Boolean = false,
+    val state: String = "UNKNOWN",
+    val fetchedAtMs: Long? = null,
+    val lastError: String? = null
 )
 
 @Entity(primaryKeys = ["serverKey", "itemId"])

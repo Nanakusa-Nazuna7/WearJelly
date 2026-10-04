@@ -8,6 +8,18 @@ import dev.wearjelly.data.LibraryKind
 class OfflineLibraryReader(private val database: OfflineDatabase) {
     suspend fun hasSnapshot(): Boolean = database.profiles().lastUsable() != null
 
+    suspend fun lyrics(itemId: String): dev.wearjelly.data.LyricsResult {
+        val profile = database.profiles().lastUsable() ?: return dev.wearjelly.data.LyricsResult.Error("无离线曲库")
+        val entity = database.lyrics().get(profile.serverKey, itemId)
+            ?: return dev.wearjelly.data.LyricsResult.NotFound
+        return when (entity.state) {
+            "AVAILABLE" -> dev.wearjelly.data.LyricsResult.Found(OfflineJson.decodeLyrics(entity.lyricsJson))
+            "NOT_FOUND" -> dev.wearjelly.data.LyricsResult.NotFound
+            else -> dev.wearjelly.data.LyricsResult.Error(entity.lastError ?: "歌词暂不可用")
+        }
+    }
+
+
     suspend fun page(
         query: LibraryKind,
         playlistId: String?,

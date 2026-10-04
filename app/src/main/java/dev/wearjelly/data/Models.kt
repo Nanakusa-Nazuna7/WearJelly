@@ -25,7 +25,16 @@ data class JellyfinItem(
     @SerialName("ImageTags") val imageTags: Map<String, String> = emptyMap(),
     @SerialName("AlbumPrimaryImageTag") val albumPrimaryImageTag: String? = null,
     @SerialName("IndexNumber") val indexNumber: Int? = null,
-    @SerialName("ParentIndexNumber") val parentIndexNumber: Int? = null
+    @SerialName("ParentIndexNumber") val parentIndexNumber: Int? = null,
+    @SerialName("Composers") val composers: List<String> = emptyList(),
+    @SerialName("Lyricists") val lyricists: List<String> = emptyList(),
+    @SerialName("Genres") val genres: List<String> = emptyList(),
+    @SerialName("ProductionYear") val productionYear: Int? = null,
+    @SerialName("PremiereDate") val premiereDate: String? = null,
+    @SerialName("Overview") val overview: String? = null,
+    @SerialName("SortName") val sortName: String? = null,
+    @SerialName("Bitrate") val bitrate: Int? = null,
+    @SerialName("MediaSources") val mediaSources: List<MediaSourceInfo> = emptyList()
 ) {
     val artistText: String
         get() = when {
@@ -37,6 +46,18 @@ data class JellyfinItem(
     val durationMs: Long
         get() = (runTimeTicks ?: 0L) / 10000L
 }
+
+@Serializable
+data class MediaSourceInfo(
+    @SerialName("Id") val id: String? = null,
+    @SerialName("Container") val container: String? = null,
+    @SerialName("Size") val size: Long? = null,
+    @SerialName("Bitrate") val bitrate: Int? = null,
+    @SerialName("Codec") val codec: String? = null,
+    @SerialName("Channels") val channels: Int? = null,
+    @SerialName("SampleRate") val sampleRate: Int? = null,
+    @SerialName("BitDepth") val bitDepth: Int? = null
+)
 
 @Serializable
 data class ItemPage(

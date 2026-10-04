@@ -306,6 +306,14 @@ class DownloadManager(
                     false
                 }
                 if (!coverSaved && coverFile.exists()) coverFile.delete()
+                serverKey?.let { key ->
+                    database.images().updateLocalState(
+                        key,
+                        "${item.id}:Primary",
+                        coverFile.absolutePath.takeIf { coverSaved },
+                        if (coverSaved) "READY" else "FAILED"
+                    )
+                }
 
                 val record = DownloadedSong(
                     item = item,
@@ -341,6 +349,12 @@ class DownloadManager(
             }
         } catch (e: Exception) {
             e.printStackTrace()
+        }
+        repository.session.value?.let { session ->
+            val key = offlineServerKey(session.serverUrl, session.userId)
+            workerScope.launch {
+                database.images().updateLocalState(key, "${itemId}:Primary", null, "METADATA")
+            }
         }
         saveIndex(_downloads.value.filter { it.item.id != itemId })
         _queue.value = _queue.value.filter { it.itemId != itemId }

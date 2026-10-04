@@ -76,6 +76,7 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -475,8 +476,8 @@ internal fun HomeScreen(viewModel: AppViewModel, account: AccountUi?) {
         item {
             HomeListButton(
                 icon = Icons.AutoMirrored.Filled.QueueMusic,
-                label = "已缓存音乐",
-                onClick = { viewModel.navigate(AppScreen.Downloads) },
+                label = "下载管理",
+                onClick = { viewModel.openDownloads() },
                 onLongClick = { viewModel.openListMenu(ListMenu.RootDownloads, "已缓存音乐") },
             )
         }
@@ -664,6 +665,13 @@ private fun CacheBadge(
         ) {
             CachedTick()
         }
+    }
+}
+
+@Composable
+private fun OfflineCacheBadge(cached: Boolean, modifier: Modifier = Modifier) {
+    Box(modifier = modifier.size(11.dp).background(if (cached) Color(0xFF7BD88F) else Color(0xFFE05A5A), CircleShape), contentAlignment = Alignment.Center) {
+        Text(if (cached) "✓" else "✗", fontSize = 7.sp, color = Color.Black, fontWeight = FontWeight.Bold)
     }
 }
 
@@ -1202,28 +1210,32 @@ internal fun LibraryItemRow(
     isCurrent: Boolean = false,
     isPlaying: Boolean = false,
     cached: Boolean = false,
+    offline: Boolean = false,
     downloadProgressFraction: Float? = null,
     trailingAction: (() -> Unit)? = null,
     onClick: () -> Unit,
     onLongClick: () -> Unit = {},
     onSwipeLeft: () -> Unit = {},
 ) {
+    val unavailableOffline = offline && !cached
     val rowBg = when {
         selected -> MaterialTheme.colors.primary
         isCurrent -> Color(0xFF123B63)
         else -> MaterialTheme.colors.surface
     }
+    val rowAlpha = if (unavailableOffline) 0.45f else 1f
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(48.dp)
+            .alpha(rowAlpha)
             .clip(RoundedCornerShape(percent = 50))
             .background(rowBg)
             .combinedClickable(
-                onClick = onClick,
-                onLongClick = onLongClick
+                onClick = if (unavailableOffline) ({}) else onClick,
+                onLongClick = if (unavailableOffline) ({}) else onLongClick
             )
-            .leftSwipeGesture(onSwipeLeft = onSwipeLeft)
+            .leftSwipeGesture(onSwipeLeft = if (unavailableOffline) ({}) else onSwipeLeft)
             .padding(horizontal = 16.dp)
     ) {
         Row(
@@ -1248,12 +1260,9 @@ internal fun LibraryItemRow(
                         modifier = Modifier.size(24.dp)
                     )
                     if (showBadge) {
-                        CacheBadge(
-                            cached = cached,
-                            progressFraction = downloadProgressFraction,
-                            modifier = Modifier.align(Alignment.BottomEnd)
-                        )
-                    }
+                         if (offline) OfflineCacheBadge(cached, Modifier.align(Alignment.BottomEnd))
+                         else CacheBadge(cached, Modifier.align(Alignment.BottomEnd), downloadProgressFraction)
+                     }
                 }
             }
             Spacer(modifier = Modifier.width(10.dp))
@@ -2220,7 +2229,7 @@ internal fun QueueScreen(viewModel: AppViewModel) {
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 internal fun DownloadsScreen(viewModel: AppViewModel) {
     val listState = rememberScalingLazyListState()
-    val downloaded by viewModel.downloadedSongs.collectAsState()
+    val items by viewModel.downloadManagementItems.collectAsState()
     val pbState by viewModel.playbackState.collectAsState()
     val queue by viewModel.downloadQueue.collectAsState()
     val uiState by viewModel.uiState.collectAsState()
@@ -2229,184 +2238,78 @@ internal fun DownloadsScreen(viewModel: AppViewModel) {
     val cachedIds by viewModel.cachedTrackIds.collectAsState()
     val downloadingIds by viewModel.downloadingIds.collectAsState()
     val downloadProgress by viewModel.downloadProgress.collectAsState()
+    val offline = viewModel.isOfflineMode
     var sectionExpanded by remember { mutableStateOf(true) }
 
-    val sortedDownloaded = remember(downloaded) {
-        val byId = downloaded.associateBy { it.item.id }
-        dev.wearjelly.data.PinyinSort.sort(downloaded.map { it.item }).mapNotNull { byId[it.id] }
-    }
+    val headerItems = 1 + (if (queue.isNotEmpty()) 1 else 0) +
+        (if (queue.isNotEmpty() && sectionExpanded) queue.size else 0)
+    rememberSongListAnchor(listState, items, headerItems)
 
-    val headerItems = 1 + (if (queue.isNotEmpty()) 1 else 0) + (if (queue.isNotEmpty() && sectionExpanded) queue.size else 0)
-    val downloadedItems = remember(sortedDownloaded) { sortedDownloaded.map { it.item } }
-    rememberSongListAnchor(listState, downloadedItems, headerItems)
-
-    AlphabetListScaffold(
-        items = downloadedItems,
-        listState = listState,
-        headerItems = headerItems,
-        overlay = {
-            if (selectionMode) {
-                MultiSelectBar(
-                    selectedCount = selectedIds.size,
-                    onExit = { viewModel.exitSelectionMode() },
-                    onMore = {
-                        viewModel.navigate(
-                            AppScreen.BatchActions(
-                                LibraryQuery(LibraryKind.DOWNLOADS),
-                                "已缓存音乐",
-                                BatchSource.DOWNLOADS,
-                            )
-                        )
-                    }
-                )
-            }
-        }
-    ) { scaleModifier ->
     ScalingLazyColumn(
         scalingParams = ListScalingParams,
-        modifier = scaleModifier.fillMaxSize().padding(start = 14.dp, end = LIST_END_PADDING_DP.dp),
+        modifier = Modifier.fillMaxSize().padding(start = 14.dp, end = LIST_END_PADDING_DP.dp),
         state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         item {
-            Text(
-                text = "已缓存音乐",
-                style = MaterialTheme.typography.title3,
-                color = MaterialTheme.colors.primary,
-                modifier = Modifier.padding(top = 12.dp)
-            )
+            Text("下载管理", style = MaterialTheme.typography.title3,
+                color = MaterialTheme.colors.primary, modifier = Modifier.padding(top = 12.dp))
         }
-
         if (queue.isNotEmpty()) {
             item {
-                Text(
-                    text = "缓存队列 (${queue.size}) " + if (sectionExpanded) "▲" else "▼",
-                    fontSize = 11.sp,
-                    color = Color(0xFF8A93A5),
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { sectionExpanded = !sectionExpanded }
-                        .padding(vertical = 4.dp)
-                )
+                Text("缓存队列 (${queue.size}) " + if (sectionExpanded) "▲" else "▼",
+                    fontSize = 11.sp, color = Color(0xFF8A93A5), textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().clickable { sectionExpanded = !sectionExpanded }.padding(vertical = 4.dp))
             }
-
             if (sectionExpanded) {
                 items(queue) { entry ->
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(Color(0xFF14202F))
-                            .padding(horizontal = 10.dp, vertical = 6.dp)
-                    ) {
+                    Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                        .background(Color(0xFF14202F)).padding(horizontal = 10.dp, vertical = 6.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             when (entry.status) {
-                                dev.wearjelly.data.DownloadStatus.RUNNING ->
-                                    CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 2.dp)
-                                dev.wearjelly.data.DownloadStatus.DONE ->
-                                    Text("✓", color = Color(0xFF7BD88F), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                dev.wearjelly.data.DownloadStatus.FAILED ->
-                                    Text("✗", color = MaterialTheme.colors.error, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                dev.wearjelly.data.DownloadStatus.WAITING ->
-                                    Text("…", color = Color(0xFF8A93A5), fontSize = 12.sp)
+                                dev.wearjelly.data.DownloadStatus.RUNNING -> CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 2.dp)
+                                dev.wearjelly.data.DownloadStatus.DONE -> Text("✓", color = Color(0xFF7BD88F), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                dev.wearjelly.data.DownloadStatus.FAILED -> Text("✗", color = MaterialTheme.colors.error, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                dev.wearjelly.data.DownloadStatus.WAITING -> Text("…", color = Color(0xFF8A93A5), fontSize = 12.sp)
                             }
                             Spacer(Modifier.width(6.dp))
-                            FadingEdgeText(
-                                entry.itemName,
-                                fontSize = 11.sp,
-                                color = Color.White,
-                                fadeColor = Color(0xFF14202F),
-                                modifier = Modifier.weight(1f)
-                            )
+                            FadingEdgeText(entry.itemName, fontSize = 11.sp, color = Color.White,
+                                fadeColor = Color(0xFF14202F), modifier = Modifier.weight(1f))
                         }
-                        when (entry.status) {
-                            dev.wearjelly.data.DownloadStatus.RUNNING -> {
+                        if (entry.status == dev.wearjelly.data.DownloadStatus.RUNNING) {
+                            val fraction = entry.totalBytes.takeIf { it > 0 }?.let { entry.downloadedBytes.toFloat() / it }
+                            if (fraction != null) {
                                 Spacer(Modifier.height(3.dp))
-                                val fraction = (entry.totalBytes.takeIf { it > 0 }?.let { entry.downloadedBytes.toFloat() / it } )
-                                if (fraction != null) {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(4.dp)
-                                            .clip(RoundedCornerShape(2.dp))
-                                            .background(Color.DarkGray)
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .fillMaxWidth(fraction.coerceIn(0f, 1f))
-                                                .height(4.dp)
-                                                .background(MaterialTheme.colors.primary)
-                                        )
-                                    }
-                                    Spacer(Modifier.height(2.dp))
-                                    val prefix = if (entry.estimated) "约 " else ""
-                                    Text(
-                                        text = "${entry.qualityLabel} · ${prefix}${(fraction * 100).toInt()}% · ${formatBytes(entry.downloadedBytes)}",
-                                        fontSize = 9.sp,
-                                        color = Color.LightGray,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                } else {
-                                    Text(
-                                        text = "${entry.qualityLabel} · 已下载 ${formatBytes(entry.downloadedBytes)}",
-                                        fontSize = 9.sp,
-                                        color = Color.LightGray,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
+                                Box(Modifier.fillMaxWidth().height(4.dp).background(Color.DarkGray)) { Box(Modifier.fillMaxWidth(fraction.coerceIn(0f, 1f)).fillMaxHeight().background(MaterialTheme.colors.primary)) }
+                                Text("${entry.qualityLabel} · ${(fraction * 100).toInt()}% · ${formatBytes(entry.downloadedBytes)}", fontSize = 9.sp, color = Color.LightGray)
                             }
-                            dev.wearjelly.data.DownloadStatus.WAITING ->
-                                Text("排队中 · ${entry.qualityLabel}", fontSize = 9.sp, color = Color(0xFF8A93A5))
-                            dev.wearjelly.data.DownloadStatus.DONE -> Unit
-                            dev.wearjelly.data.DownloadStatus.FAILED ->
-                                Text("缓存失败，请检查网络后重试", fontSize = 9.sp, color = Color(0xFF8A93A5))
+                        } else if (entry.status == dev.wearjelly.data.DownloadStatus.WAITING) {
+                            Text("排队中 · ${entry.qualityLabel}", fontSize = 9.sp, color = Color(0xFF8A93A5))
+                        } else if (entry.status == dev.wearjelly.data.DownloadStatus.FAILED) {
+                            Text("缓存失败，请检查网络后重试", fontSize = 9.sp, color = Color(0xFF8A93A5))
                         }
                     }
                 }
             }
         }
-
-        if (sortedDownloaded.isEmpty()) {
-            item { Text("暂无已缓存歌曲", color = Color.Gray, fontSize = 12.sp) }
+        if (items.isEmpty()) {
+            item { Text(if (offline) "暂无歌曲元数据" else "暂无下载记录", color = Color.Gray, fontSize = 12.sp) }
         } else {
-            itemsIndexed(sortedDownloaded) { index, downloadedSong ->
-                val item = downloadedSong.item
-                LibraryItemRow(
-                    item = item,
-                    query = LibraryQuery(LibraryKind.DOWNLOADS),
-                    selected = item.id in selectedIds,
-                    selectionMode = selectionMode,
-                    isCurrent = pbState.current?.id == item.id,
-                    isPlaying = pbState.isPlaying,
-                    cached = item.id in cachedIds,
+            itemsIndexed(items) { _, item ->
+                LibraryItemRow(item = item, query = LibraryQuery(LibraryKind.DOWNLOADS),
+                    selected = item.id in selectedIds, selectionMode = selectionMode,
+                    isCurrent = pbState.current?.id == item.id, isPlaying = pbState.isPlaying,
+                    cached = item.id in cachedIds, offline = offline,
                     downloadProgressFraction = if (item.id in downloadingIds) downloadProgress[item.id]?.fraction else null,
-                    onClick = {
-                        if (selectionMode) viewModel.toggleSongSelection(item.id) else viewModel.playTrack(item)
-                    },
-                    onLongClick = {
-                        if (!selectionMode) viewModel.openTrack(item, LibraryQuery(LibraryKind.DOWNLOADS))
-                    },
-                    onSwipeLeft = {
-                        if (selectionMode) {
-                            viewModel.selectRangeFromSwipe(item.id, sortedDownloaded.map { it.item.id })
-                        } else {
-                            viewModel.beginSelectionFromSwipe(item.id)
-                        }
-                    },
-                )
+                    onClick = { if (selectionMode) viewModel.toggleSongSelection(item.id) else viewModel.playTrack(item) },
+                    onLongClick = { if (!selectionMode) viewModel.openTrack(item, LibraryQuery(LibraryKind.DOWNLOADS)) },
+                    onSwipeLeft = { if (selectionMode) viewModel.selectRangeFromSwipe(item.id, items.map { it.id }) else viewModel.beginSelectionFromSwipe(item.id) })
             }
         }
-        if (selectionMode && sortedDownloaded.isNotEmpty()) {
-            item { Spacer(Modifier.height(56.dp)) }
-        }
-    }
+        if (selectionMode && items.isNotEmpty()) { item { Spacer(Modifier.height(56.dp)) } }
     }
 }
-
 @Composable
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 internal fun HistoryScreen(viewModel: AppViewModel) {
