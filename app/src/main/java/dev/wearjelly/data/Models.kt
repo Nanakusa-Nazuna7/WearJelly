@@ -59,11 +59,19 @@ data class SongLyrics(
     val isSynchronized: Boolean
 )
 
+/** 歌词获取三态：NotFound=服务器确认无歌词（404/405/501，按"纯音乐"处理）；Error=网络/服务异常可重试。 */
+sealed interface LyricsResult {
+    data class Found(val lyrics: SongLyrics) : LyricsResult
+    data object NotFound : LyricsResult
+    data class Error(val message: String? = null) : LyricsResult
+}
+
 enum class LibraryKind {
     ARTISTS,
     ALBUMS,
     SONGS,
-    DOWNLOADS
+    DOWNLOADS,
+    PLAYLISTS
 }
 
 enum class AudioBitrate(val kbps: Int, val displayName: String) {
