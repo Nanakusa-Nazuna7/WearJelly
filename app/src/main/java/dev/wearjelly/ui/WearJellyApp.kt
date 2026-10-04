@@ -19,6 +19,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -40,11 +41,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.Icon
-import androidx.compose.material.OutlinedTextField
-import androidx.compose.material.TextFieldDefaults
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
@@ -78,9 +77,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
@@ -93,6 +94,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
@@ -101,20 +103,28 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.media3.common.Player
-import androidx.wear.compose.material.SwipeToDismissBox
-import androidx.wear.compose.material.rememberSwipeToDismissBoxState
-import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
-import androidx.wear.compose.foundation.lazy.ScalingLazyColumnDefaults
+import androidx.wear.compose.foundation.lazy.TransformingLazyColumn
+import androidx.wear.compose.foundation.lazy.TransformingLazyColumnState
 import androidx.wear.compose.foundation.lazy.items
 import androidx.wear.compose.foundation.lazy.itemsIndexed
-import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
-import androidx.wear.compose.material.Button
-import androidx.wear.compose.material.ButtonDefaults
-import androidx.wear.compose.material.CircularProgressIndicator
-import androidx.wear.compose.material.Colors
-import androidx.wear.compose.material.MaterialTheme
-import androidx.wear.compose.material.Scaffold
-import androidx.wear.compose.material.Text
+import androidx.wear.compose.foundation.lazy.rememberTransformingLazyColumnState
+import androidx.wear.compose.foundation.rememberSwipeToDismissBoxState
+import androidx.wear.compose.material3.AppScaffold
+import androidx.wear.compose.material3.Button
+import androidx.wear.compose.material3.ButtonColors
+import androidx.wear.compose.material3.ButtonDefaults
+import androidx.wear.compose.material3.CircularProgressIndicator
+import androidx.wear.compose.material3.ColorScheme
+import androidx.wear.compose.material3.Icon
+import androidx.wear.compose.material3.MaterialTheme
+import androidx.wear.compose.material3.ScreenScaffold
+import androidx.wear.compose.material3.SwipeToDismissBox
+import androidx.wear.compose.material3.SurfaceTransformation
+import androidx.wear.compose.material3.Text
+import androidx.wear.compose.material3.TextDefaults
+import androidx.wear.compose.material3.contentColorFor
+import androidx.wear.compose.material3.lazy.rememberTransformationSpec
+import androidx.wear.compose.material3.lazy.transformedHeight
 import coil.compose.AsyncImage
 import dev.wearjelly.data.JellyfinItem
 import dev.wearjelly.data.LibraryKind
@@ -128,12 +138,12 @@ import kotlin.math.sqrt
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
-private val WearThemeColors = Colors(
+private val WearThemeColors = ColorScheme(
     primary = Color(0xFF8CB4FF),
-    primaryVariant = Color(0xFF5B8DEF),
+    primaryDim = Color(0xFF5B8DEF),
     secondary = Color(0xFF64B5F6),
     background = Color(0xFF000000),
-    surface = Color(0xFF1E1E1E),
+    surfaceContainer = Color(0xFF1E1E1E),
     onPrimary = Color(0xFF001A40),
     onSecondary = Color(0xFF001A40),
     onBackground = Color(0xFFFFFFFF),
@@ -142,9 +152,21 @@ private val WearThemeColors = Colors(
     error = Color(0xFFFF6B6B)
 )
 
+/**
+ * M2 `solidButtonColors(X)` 的 M3 等价：
+ * containerColor 对应 backgroundColor，contentColor 按官方 contentColorFor 配对
+ * （与 M2 的默认 contentColor = contentColorFor(backgroundColor) 语义一致）。
+ */
+@Composable
+internal fun solidButtonColors(backgroundColor: Color): ButtonColors =
+    ButtonDefaults.buttonColors(
+        containerColor = backgroundColor,
+        contentColor = contentColorFor(backgroundColor)
+    )
+
 @Composable
 fun WearJellyApp(viewModel: AppViewModel) {
-    MaterialTheme(colors = WearThemeColors) {
+    MaterialTheme(colorScheme = WearThemeColors) {
         val uiState by viewModel.uiState.collectAsState()
         val stateHolder = rememberSaveableStateHolder()
         val isRootScreen = uiState.backStack.size <= 1
@@ -164,10 +186,11 @@ fun WearJellyApp(viewModel: AppViewModel) {
             viewModel.exitSelectionMode()
         }
 
-        Scaffold(
+        AppScaffold(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black)
+                .background(Color.Black),
+            timeText = {}
         ) {
             val screenContent: @Composable () -> Unit = {
                 Box(
@@ -259,30 +282,58 @@ fun WearJellyApp(viewModel: AppViewModel) {
 }
 
 /**
- * 参考图的列表缩放：中央条目保持原始尺寸，越靠近视野上下边缘的条目按距离等比缩小并渐隐，
- * 让圆形屏幕上滚出视野的条目自然淡出，而不是被圆边硬切。
- *
- * 注意：minElementHeight/maxElementHeight/minTransitionArea/maxTransitionArea 的单位是
- * 「占视口高度的比例」(0f..1f)，不是像素——早期按像素填 4000f/12000f 会让所有条目
- * 永远落在缩放区间内，全部被压到 edgeScale（45% 问题）。
+ * 登录表单输入框：手机版 Compose Material 的 OutlinedTextField 在 Wear Material3 中没有对应组件，
+ * 按官方迁移指引用 foundation BasicTextField + 自绘描边装饰盒还原原样式
+ * （聚焦描边 primary、未聚焦描边 DarkGray、白色输入文字、空值时显示灰色标签）。
  */
-internal val ListScalingParams = ScalingLazyColumnDefaults.scalingParams(
-    edgeScale = 0.6f,
-    edgeAlpha = 0.35f,
-    minElementHeight = 0.2f,
-    maxElementHeight = 0.6f,
-    minTransitionArea = 0.25f,
-    maxTransitionArea = 0.5f,
-    viewportVerticalOffsetResolver = { (it.maxHeight * 0.12f).toInt() },
-)
+@Composable
+private fun LoginTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    modifier: Modifier = Modifier,
+    visualTransformation: VisualTransformation = VisualTransformation.None,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+) {
+    var focused by remember { mutableStateOf(false) }
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        singleLine = true,
+        textStyle = TextStyle(color = Color.White),
+        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+        visualTransformation = visualTransformation,
+        keyboardOptions = keyboardOptions,
+        modifier = modifier.onFocusChanged { focused = it.isFocused },
+        decorationBox = { innerTextField ->
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(
+                        width = 1.dp,
+                        color = if (focused) MaterialTheme.colorScheme.primary else Color.DarkGray,
+                        shape = RoundedCornerShape(4.dp)
+                    )
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
+            ) {
+                if (value.isEmpty()) {
+                    Text(label, fontSize = 10.sp, color = Color.Gray)
+                }
+                innerTextField()
+            }
+        }
+    )
+}
 
 @Composable
 internal fun LoginScreen(viewModel: AppViewModel, loginUi: LoginUi) {
-    val listState = rememberScalingLazyListState()
+    val listState = rememberTransformingLazyColumnState()
+    val transformationSpec = rememberTransformationSpec()
     val focusManager = LocalFocusManager.current
 
-    ScalingLazyColumn(
-        scalingParams = ListScalingParams,
+    ScreenScaffold(scrollState = listState) { contentPadding ->
+    TransformingLazyColumn(
+        contentPadding = contentPadding,
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
         state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -291,10 +342,13 @@ internal fun LoginScreen(viewModel: AppViewModel, loginUi: LoginUi) {
         item {
             Text(
                 text = "登录 Jellyfin",
-                style = MaterialTheme.typography.title3,
-                color = MaterialTheme.colors.primary,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
                 textAlign = TextAlign.Center,
-                modifier = Modifier.padding(top = 16.dp)
+                modifier = Modifier
+                    .padding(top = 16.dp)
+                    .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                    .transformedHeight(this, transformationSpec)
             )
         }
 
@@ -302,59 +356,53 @@ internal fun LoginScreen(viewModel: AppViewModel, loginUi: LoginUi) {
             item {
                 Text(
                     text = loginUi.error,
-                    color = MaterialTheme.colors.error,
-                    style = MaterialTheme.typography.caption2,
-                    textAlign = TextAlign.Center
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.labelSmall,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                        .transformedHeight(this, transformationSpec)
                 )
             }
         }
 
         item {
-            OutlinedTextField(
+            LoginTextField(
                 value = loginUi.server,
                 onValueChange = { viewModel.changeServer(it) },
-                label = { Text("服务器地址", fontSize = 10.sp, color = Color.Gray) },
-                singleLine = true,
+                label = "服务器地址",
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
-                colors = TextFieldDefaults.outlinedTextFieldColors(
-                    textColor = Color.White,
-                    focusedBorderColor = MaterialTheme.colors.primary,
-                    unfocusedBorderColor = Color.DarkGray
-                ),
-                modifier = Modifier.fillMaxWidth(0.9f)
+                modifier = Modifier
+                    .fillMaxWidth(0.9f)
+                    .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                    .transformedHeight(this, transformationSpec)
             )
         }
 
         item {
-            OutlinedTextField(
+            LoginTextField(
                 value = loginUi.username,
                 onValueChange = { viewModel.changeUsername(it) },
-                label = { Text("用户名", fontSize = 10.sp, color = Color.Gray) },
-                singleLine = true,
+                label = "用户名",
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-                colors = TextFieldDefaults.outlinedTextFieldColors(
-                    textColor = Color.White,
-                    focusedBorderColor = MaterialTheme.colors.primary,
-                    unfocusedBorderColor = Color.DarkGray
-                ),
-                modifier = Modifier.fillMaxWidth(0.9f)
+                modifier = Modifier
+                    .fillMaxWidth(0.9f)
+                    .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                    .transformedHeight(this, transformationSpec)
             )
         }
 
         item {
-            OutlinedTextField(
+            LoginTextField(
                 value = loginUi.password,
                 onValueChange = { viewModel.changePassword(it) },
-                label = { Text("密码", fontSize = 10.sp, color = Color.Gray) },
-                singleLine = true,
+                label = "密码",
                 visualTransformation = PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
-                colors = TextFieldDefaults.outlinedTextFieldColors(
-                    textColor = Color.White,
-                    focusedBorderColor = MaterialTheme.colors.primary,
-                    unfocusedBorderColor = Color.DarkGray
-                ),
-                modifier = Modifier.fillMaxWidth(0.9f)
+                modifier = Modifier
+                    .fillMaxWidth(0.9f)
+                    .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                    .transformedHeight(this, transformationSpec)
             )
         }
 
@@ -365,22 +413,29 @@ internal fun LoginScreen(viewModel: AppViewModel, loginUi: LoginUi) {
                     viewModel.login()
                 },
                 enabled = !loginUi.submitting,
-                modifier = Modifier.fillMaxWidth(0.9f).height(40.dp),
-                colors = ButtonDefaults.primaryButtonColors()
+                modifier = Modifier
+                    .fillMaxWidth(0.9f)
+                    .height(40.dp)
+                    .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                    .transformedHeight(this, transformationSpec),
+                colors = ButtonDefaults.buttonColors(),
+                transformation = SurfaceTransformation(transformationSpec)
             ) {
                 if (loginUi.submitting) {
                     CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                 } else {
-                    Text("登录", style = MaterialTheme.typography.button)
+                    Text("登录", style = MaterialTheme.typography.labelLarge)
                 }
             }
         }
+    }
     }
 }
 
 @Composable
 internal fun HomeScreen(viewModel: AppViewModel, account: AccountUi?) {
-    val listState = rememberScalingLazyListState()
+    val listState = rememberTransformingLazyColumnState()
+    val transformationSpec = rememberTransformationSpec()
     val pbState by viewModel.playbackState.collectAsState()
     val last by viewModel.lastPlayback.collectAsState()
     val cachedIds by viewModel.cachedTrackIds.collectAsState()
@@ -391,8 +446,9 @@ internal fun HomeScreen(viewModel: AppViewModel, account: AccountUi?) {
     val miniItem = current
         ?: lastSnapshot?.let { it.queue.getOrNull(it.queueIndex) ?: it.queue.firstOrNull() }
 
-    ScalingLazyColumn(
-        scalingParams = ListScalingParams,
+    ScreenScaffold(scrollState = listState) { contentPadding ->
+    TransformingLazyColumn(
+        contentPadding = contentPadding,
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
         state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -401,9 +457,12 @@ internal fun HomeScreen(viewModel: AppViewModel, account: AccountUi?) {
         item {
             Text(
                 text = "WearJelly",
-                style = MaterialTheme.typography.title3,
-                color = MaterialTheme.colors.primary,
-                modifier = Modifier.padding(top = 16.dp)
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .padding(top = 16.dp)
+                    .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                    .transformedHeight(this, transformationSpec)
             )
         }
 
@@ -411,8 +470,11 @@ internal fun HomeScreen(viewModel: AppViewModel, account: AccountUi?) {
             item {
                 Text(
                     text = "欢迎, ${account.userName}",
-                    style = MaterialTheme.typography.caption2,
-                    color = Color.Gray
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.Gray,
+                    modifier = Modifier
+                        .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                        .transformedHeight(this, transformationSpec)
                 )
             }
         }
@@ -431,7 +493,10 @@ internal fun HomeScreen(viewModel: AppViewModel, account: AccountUi?) {
                     onTogglePlay = {
                         if (current != null) viewModel.togglePlayPause() else viewModel.resumeLastPlayback()
                     },
-                    onQueue = { viewModel.navigate(AppScreen.Queue) }
+                    onQueue = { viewModel.navigate(AppScreen.Queue) },
+                    modifier = Modifier
+                        .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                        .transformedHeight(this, transformationSpec)
                 )
             }
         }
@@ -443,6 +508,10 @@ internal fun HomeScreen(viewModel: AppViewModel, account: AccountUi?) {
                 label = "艺人",
                 onClick = { viewModel.openLibrary(LibraryKind.ARTISTS) },
                 onLongClick = { viewModel.openListMenu(ListMenu.RootArtists, "艺人") },
+                modifier = Modifier
+                    .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                    .transformedHeight(this, transformationSpec),
+                transformation = SurfaceTransformation(transformationSpec)
             )
         }
 
@@ -452,6 +521,10 @@ internal fun HomeScreen(viewModel: AppViewModel, account: AccountUi?) {
                 label = "专辑",
                 onClick = { viewModel.openLibrary(LibraryKind.ALBUMS) },
                 onLongClick = { viewModel.openListMenu(ListMenu.RootAlbums, "专辑") },
+                modifier = Modifier
+                    .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                    .transformedHeight(this, transformationSpec),
+                transformation = SurfaceTransformation(transformationSpec)
             )
         }
 
@@ -461,6 +534,10 @@ internal fun HomeScreen(viewModel: AppViewModel, account: AccountUi?) {
                 label = "所有歌曲",
                 onClick = { viewModel.openLibrary(LibraryKind.SONGS) },
                 onLongClick = { viewModel.openListMenu(ListMenu.RootSongs, "所有歌曲") },
+                modifier = Modifier
+                    .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                    .transformedHeight(this, transformationSpec),
+                transformation = SurfaceTransformation(transformationSpec)
             )
         }
 
@@ -470,6 +547,10 @@ internal fun HomeScreen(viewModel: AppViewModel, account: AccountUi?) {
                 label = "播放列表",
                 onClick = { viewModel.openLibrary(LibraryKind.PLAYLISTS) },
                 onLongClick = { viewModel.openListMenu(ListMenu.RootPlaylists, "播放列表") },
+                modifier = Modifier
+                    .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                    .transformedHeight(this, transformationSpec),
+                transformation = SurfaceTransformation(transformationSpec)
             )
         }
 
@@ -479,6 +560,10 @@ internal fun HomeScreen(viewModel: AppViewModel, account: AccountUi?) {
                 label = "下载管理",
                 onClick = { viewModel.openDownloads() },
                 onLongClick = { viewModel.openListMenu(ListMenu.RootDownloads, "已缓存音乐") },
+                modifier = Modifier
+                    .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                    .transformedHeight(this, transformationSpec),
+                transformation = SurfaceTransformation(transformationSpec)
             )
         }
 
@@ -488,14 +573,23 @@ internal fun HomeScreen(viewModel: AppViewModel, account: AccountUi?) {
                 label = "播放历史",
                 onClick = { viewModel.navigate(AppScreen.History) },
                 onLongClick = { viewModel.openListMenu(ListMenu.RootHistory, "播放历史") },
+                modifier = Modifier
+                    .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                    .transformedHeight(this, transformationSpec),
+                transformation = SurfaceTransformation(transformationSpec)
             )
         }
 
         item {
             Button(
                 onClick = { viewModel.navigate(AppScreen.Settings) },
-                modifier = Modifier.fillMaxWidth().height(42.dp),
-                colors = ButtonDefaults.secondaryButtonColors()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(42.dp)
+                    .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                    .transformedHeight(this, transformationSpec),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer, contentColor = MaterialTheme.colorScheme.onSurface),
+                transformation = SurfaceTransformation(transformationSpec)
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.Settings, contentDescription = null)
@@ -505,36 +599,39 @@ internal fun HomeScreen(viewModel: AppViewModel, account: AccountUi?) {
             }
         }
     }
+    }
 }
 
 /**
  * 主页列表入口按钮（t2）：单击进入列表，长按打开该列表类型的列表级长按菜单。
- * 复刻 wear [Button] 内部 RoundButton 视觉（CircleShape + secondaryButtonColors +
- * typography.button），在其上叠加 [combinedClickable] 长按，保证入口样式不变。
+ * M2 时代手动复刻 wear [Button] 视觉；迁移后直接使用 Wear Material3 [Button]
+ * （圆角容器 + labelLarge），长按由 M3 Button 的 onLongClick 承担。
  */
-@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun HomeListButton(
     icon: ImageVector,
     label: String,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    transformation: SurfaceTransformation? = null,
 ) {
-    val colors = ButtonDefaults.secondaryButtonColors()
-    val contentColor = colors.contentColor(enabled = true).value
-    Box(
-        modifier = Modifier
+    Button(
+        onClick = onClick,
+        onLongClick = onLongClick,
+        modifier = modifier
             .fillMaxWidth()
-            .height(42.dp)
-            .clip(CircleShape)
-            .background(colors.backgroundColor(enabled = true).value)
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
-        contentAlignment = Alignment.Center,
+            .height(42.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            contentColor = MaterialTheme.colorScheme.onSurface
+        ),
+        transformation = transformation
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, contentDescription = null, tint = contentColor)
+            Icon(icon, contentDescription = null)
             Spacer(Modifier.width(8.dp))
-            Text(label, style = MaterialTheme.typography.button, color = contentColor, maxLines = 1)
+            Text(label, style = MaterialTheme.typography.labelLarge, maxLines = 1)
         }
     }
 }
@@ -556,9 +653,10 @@ private fun MiniPlayerCard(
     onClick: () -> Unit,
     onTogglePlay: () -> Unit,
     onQueue: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(Color(0xFF14202F))
@@ -578,7 +676,7 @@ private fun MiniPlayerCard(
                     Icon(
                         Icons.Default.MusicNote,
                         contentDescription = null,
-                        tint = MaterialTheme.colors.primary,
+                        tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(34.dp)
                     )
                 }
@@ -604,7 +702,7 @@ private fun MiniPlayerCard(
             Icon(
                 imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                 contentDescription = if (isPlaying) "暂停" else "播放",
-                tint = MaterialTheme.colors.primary,
+                tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier
                     .size(26.dp)
                     .clickable(onClick = onTogglePlay)
@@ -634,7 +732,7 @@ private fun MiniPlayerCard(
                             (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
                         )
                         .height(2.dp)
-                        .background(MaterialTheme.colors.primary)
+                        .background(MaterialTheme.colorScheme.primary)
                 )
             }
         }
@@ -653,7 +751,7 @@ private fun CacheBadge(
 ) {
     when {
         progressFraction != null -> CircularProgressIndicator(
-            progress = progressFraction.coerceIn(0f, 1f),
+            progress = { progressFraction.coerceIn(0f, 1f) },
             modifier = modifier.size(11.dp),
             strokeWidth = 1.5.dp
         )
@@ -683,7 +781,8 @@ internal fun CachedTick() {
 
 @Composable
 internal fun LibraryScreen(viewModel: AppViewModel, screen: AppScreen.Library) {
-    val listState = rememberScalingLazyListState()
+    val listState = rememberTransformingLazyColumnState()
+    val transformationSpec = rememberTransformationSpec()
     val uiState by viewModel.uiState.collectAsState()
     val lib = uiState.libraries[screen.query] ?: LibraryUi()
     val selectedIds = uiState.selectedSongIds
@@ -698,6 +797,7 @@ internal fun LibraryScreen(viewModel: AppViewModel, screen: AppScreen.Library) {
     val headerItems = 1
     rememberSongListAnchor(listState, lib.items, headerItems)
 
+    ScreenScaffold(scrollState = listState) { contentPadding ->
     AlphabetListScaffold(
         items = lib.items,
         listState = listState,
@@ -716,8 +816,8 @@ internal fun LibraryScreen(viewModel: AppViewModel, screen: AppScreen.Library) {
             }
         }
     ) { scaleModifier ->
-        ScalingLazyColumn(
-            scalingParams = ListScalingParams,
+        TransformingLazyColumn(
+            contentPadding = contentPadding,
                 modifier = scaleModifier.fillMaxSize().padding(start = 14.dp, end = LIST_END_PADDING_DP.dp),
             state = listState,
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -726,23 +826,36 @@ internal fun LibraryScreen(viewModel: AppViewModel, screen: AppScreen.Library) {
             item {
                 Text(
                     text = screen.title,
-                    style = MaterialTheme.typography.title3,
-                    color = MaterialTheme.colors.primary,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
                     textAlign = TextAlign.Center,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 12.dp)
+                    modifier = Modifier
+                        .padding(top = 12.dp)
+                        .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                        .transformedHeight(this, transformationSpec)
                 )
             }
 
             if (lib.loading && lib.items.isEmpty()) {
                 item {
-                    CircularProgressIndicator(modifier = Modifier.padding(16.dp))
+                    CircularProgressIndicator(
+                        modifier = Modifier
+                            .padding(16.dp)
+                            .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                            .transformedHeight(this, transformationSpec)
+                    )
                 }
             } else if (lib.error != null && lib.items.isEmpty()) {
                 item {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(text = lib.error, color = MaterialTheme.colors.error, fontSize = 12.sp)
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier
+                            .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                            .transformedHeight(this, transformationSpec)
+                    ) {
+                        Text(text = lib.error, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
                         Spacer(Modifier.height(8.dp))
                         Button(onClick = { viewModel.retryLibrary(screen.query) }) {
                             Text("重试")
@@ -754,6 +867,9 @@ internal fun LibraryScreen(viewModel: AppViewModel, screen: AppScreen.Library) {
                     LibraryItemRow(
                         item = item,
                         query = screen.query,
+                        modifier = Modifier
+                            .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                            .transformedHeight(this, transformationSpec),
                          selected = item.id in selectedIds,
                          selectionMode = selectionMode && isSelectable,
                         isCurrent = pbState.current?.id == item.id,
@@ -818,22 +934,53 @@ internal fun LibraryScreen(viewModel: AppViewModel, screen: AppScreen.Library) {
 
                 if (selectionMode && isSelectable) {
                     // 底部固定操作栏的避让空间
-                    item { Spacer(Modifier.height(56.dp)) }
+                    item {
+                        Spacer(
+                            Modifier
+                                .height(56.dp)
+                                .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                                .transformedHeight(this, transformationSpec)
+                        )
+                    }
                 }
 
                 if (lib.loading) {
                     item {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp).padding(4.dp))
+                        CircularProgressIndicator(
+                            modifier = Modifier
+                                .size(24.dp)
+                                .padding(4.dp)
+                                .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                                .transformedHeight(this, transformationSpec)
+                        )
                     }
                 }
             }
         }
         }
+    }
+}
+
+/**
+ * M2 ScalingLazyListState 的 centerItemIndex/centerItemScrollOffset 在 TransformingLazyColumnState
+ * 上不存在：改从 layoutInfo.visibleItems 计算「离视口中心最近的条目」及其中心线偏移（像素）。
+ * 偏移语义与 TransformingLazyColumnState.scrollToItem(index, scrollOffset) 对齐：
+ * 条目中心位于视口中心线下方为正（正偏移表示需要把条目向上滚），存取往返一致。
+ */
+private fun TransformingLazyColumnState.centerItem(): Pair<Int, Int> {
+    val info = layoutInfo
+    val viewportCenter = info.viewportSize.height / 2
+    val nearest = info.visibleItems.minByOrNull { abs(it.offset + it.transformedHeight / 2 - viewportCenter) }
+    return if (nearest == null) {
+        anchorItemIndex to anchorItemScrollOffset
+    } else {
+        nearest.index to (nearest.offset + nearest.transformedHeight / 2 - viewportCenter)
+    }
 }
 
 @Composable
 private fun rememberSongListAnchor(
-    listState: androidx.wear.compose.foundation.lazy.ScalingLazyListState,
+    listState: TransformingLazyColumnState,
     items: List<JellyfinItem>,
     headerItems: Int,
     initialIndex: Int = 0,
@@ -849,7 +996,8 @@ private fun rememberSongListAnchor(
     }
     LaunchedEffect(listState, items, headerItems) {
         snapshotFlow {
-            (listState.centerItemIndex - headerItems) to listState.centerItemScrollOffset
+            val (centerIndex, centerOffset) = listState.centerItem()
+            (centerIndex - headerItems) to centerOffset
         }.collect { (index, offset) ->
             if (index in items.indices) {
                 anchorIndex = index
@@ -892,7 +1040,7 @@ internal fun resolveSongListAnchorIndex(
 @Composable
 private fun AlphabetListScaffold(
     items: List<JellyfinItem>,
-    listState: androidx.wear.compose.foundation.lazy.ScalingLazyListState,
+    listState: TransformingLazyColumnState,
     headerItems: Int,
     showIndex: Boolean = true,
     overlay: (@Composable () -> Unit)? = null,
@@ -969,7 +1117,7 @@ private fun AlphabetListScaffold(
                     }
                 }
 
-                val centerItemIdx = listState.centerItemIndex - headerItems
+                val centerItemIdx = listState.centerItem().first - headerItems
                 val scrollLetterIdx = items.getOrNull(centerItemIdx)?.let {
                     dev.wearjelly.data.PinyinSort.LETTERS.indexOf(
                         dev.wearjelly.data.PinyinSort.letterBucket(it.name)
@@ -1205,6 +1353,7 @@ private fun EqualizerBars(playing: Boolean, color: Color, modifier: Modifier = M
 internal fun LibraryItemRow(
     item: JellyfinItem,
     query: LibraryQuery,
+    modifier: Modifier = Modifier,
     selected: Boolean = false,
     selectionMode: Boolean = false,
     isCurrent: Boolean = false,
@@ -1219,13 +1368,13 @@ internal fun LibraryItemRow(
 ) {
     val unavailableOffline = offline && !cached
     val rowBg = when {
-        selected -> MaterialTheme.colors.primary
+        selected -> MaterialTheme.colorScheme.primary
         isCurrent -> Color(0xFF123B63)
-        else -> MaterialTheme.colors.surface
+        else -> MaterialTheme.colorScheme.surfaceContainer
     }
     val rowAlpha = if (unavailableOffline) 0.45f else 1f
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .height(48.dp)
             .alpha(rowAlpha)
@@ -1250,13 +1399,13 @@ internal fun LibraryItemRow(
             }
             val showBadge = query.kind == LibraryKind.SONGS || query.kind == LibraryKind.DOWNLOADS
             if (isCurrent && query.kind != LibraryKind.ARTISTS && query.kind != LibraryKind.ALBUMS) {
-                EqualizerBars(playing = isPlaying, color = MaterialTheme.colors.primary)
+                EqualizerBars(playing = isPlaying, color = MaterialTheme.colorScheme.primary)
             } else {
                 Box(modifier = Modifier.size(24.dp)) {
                     Icon(
                         imageVector = icon,
                         contentDescription = null,
-                        tint = if (selected) MaterialTheme.colors.onPrimary else MaterialTheme.colors.primary,
+                        tint = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(24.dp)
                     )
                     if (showBadge) {
@@ -1270,7 +1419,7 @@ internal fun LibraryItemRow(
                 Text(
                     if (selected) "✓" else "○",
                     fontSize = 18.sp,
-                    color = if (selected) MaterialTheme.colors.onPrimary else Color.LightGray
+                    color = if (selected) MaterialTheme.colorScheme.onPrimary else Color.LightGray
                 )
                 Spacer(modifier = Modifier.width(6.dp))
             }
@@ -1374,7 +1523,7 @@ private fun MultiSelectBar(
         Button(
             onClick = onExit,
             modifier = Modifier.height(30.dp),
-            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF4A5568))
+            colors = solidButtonColors(Color(0xFF4A5568))
         ) {
             Text(Copy.EXIT_SELECTION, fontSize = 10.sp, color = Color.White, maxLines = 1)
         }
@@ -1389,7 +1538,7 @@ private fun MultiSelectBar(
         Button(
             onClick = onMore,
             modifier = Modifier.height(30.dp),
-            colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF22304A))
+            colors = solidButtonColors(Color(0xFF22304A))
         ) {
             Text(Copy.MORE, fontSize = 10.sp, color = Color.White, maxLines = 1)
         }
@@ -1413,29 +1562,38 @@ internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.Batch
     val selectedItems = items.filter { it.id in uiState.selectedSongIds }
     val context = LocalContext.current
 
-    ScalingLazyColumn(
-        scalingParams = ListScalingParams,
+    val listState = rememberTransformingLazyColumnState()
+    val transformationSpec = rememberTransformationSpec()
+    ScreenScaffold(scrollState = listState) { contentPadding ->
+    TransformingLazyColumn(
+        contentPadding = contentPadding,
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
-        state = rememberScalingLazyListState(),
+        state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         item {
             Text(
                 text = screen.title,
-                style = MaterialTheme.typography.title3,
-                color = MaterialTheme.colors.primary,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
                 textAlign = TextAlign.Center,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 12.dp)
+                modifier = Modifier
+                    .padding(top = 12.dp)
+                    .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                    .transformedHeight(this, transformationSpec)
             )
         }
         item {
             Text(
                 text = Copy.selectedCount(uiState.selectedSongIds.size),
                 fontSize = 11.sp,
-                color = Color.Gray
+                color = Color.Gray,
+                modifier = Modifier
+                    .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                    .transformedHeight(this, transformationSpec)
             )
         }
         if (screen.source != BatchSource.ARTISTS) {
@@ -1445,8 +1603,11 @@ internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.Batch
                         viewModel.batchSelectedSongsToQueue(items)
                         viewModel.goBack()
                     },
-                    modifier = Modifier.fillMaxWidth().height(40.dp),
-                    colors = ButtonDefaults.primaryButtonColors()
+                    modifier = Modifier.fillMaxWidth().height(40.dp)
+                        .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                        .transformedHeight(this, transformationSpec),
+                    colors = ButtonDefaults.buttonColors(),
+                    transformation = SurfaceTransformation(transformationSpec)
                 ) {
                     Text(Copy.ADD_TO_QUEUE, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
@@ -1459,8 +1620,11 @@ internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.Batch
                         viewModel.batchSelectedSongsToCache(items)
                         viewModel.goBack()
                     },
-                    modifier = Modifier.fillMaxWidth().height(40.dp),
-                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF4A5568))
+                    modifier = Modifier.fillMaxWidth().height(40.dp)
+                        .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                        .transformedHeight(this, transformationSpec),
+                    colors = solidButtonColors(Color(0xFF4A5568)),
+                    transformation = SurfaceTransformation(transformationSpec)
                 ) {
                     Text(Copy.cacheSelected(uiState.selectedSongIds.size), fontSize = 12.sp, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
@@ -1471,8 +1635,11 @@ internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.Batch
                         viewModel.playItemsNext(selectedItems)
                         viewModel.goBack()
                     },
-                    modifier = Modifier.fillMaxWidth().height(40.dp),
-                    colors = ButtonDefaults.secondaryButtonColors()
+                    modifier = Modifier.fillMaxWidth().height(40.dp)
+                        .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                        .transformedHeight(this, transformationSpec),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer, contentColor = MaterialTheme.colorScheme.onSurface),
+                    transformation = SurfaceTransformation(transformationSpec)
                 ) {
                     Text(Copy.PLAY_NEXT, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
@@ -1484,8 +1651,11 @@ internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.Batch
                         viewModel.exitSelectionMode()
                         viewModel.goBack()
                     },
-                    modifier = Modifier.fillMaxWidth().height(40.dp),
-                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF4A5568))
+                    modifier = Modifier.fillMaxWidth().height(40.dp)
+                        .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                        .transformedHeight(this, transformationSpec),
+                    colors = solidButtonColors(Color(0xFF4A5568)),
+                    transformation = SurfaceTransformation(transformationSpec)
                 ) {
                     Text(Copy.DELETE_SELECTED_CACHES, fontSize = 12.sp, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
@@ -1498,8 +1668,11 @@ internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.Batch
                         viewModel.removeSelectedFromQueue(items)
                         viewModel.goBack()
                     },
-                    modifier = Modifier.fillMaxWidth().height(40.dp),
-                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF4A5568))
+                    modifier = Modifier.fillMaxWidth().height(40.dp)
+                        .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                        .transformedHeight(this, transformationSpec),
+                    colors = solidButtonColors(Color(0xFF4A5568)),
+                    transformation = SurfaceTransformation(transformationSpec)
                 ) {
                     Text("从队列移除", fontSize = 12.sp, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
@@ -1513,8 +1686,11 @@ internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.Batch
                         viewModel.exitSelectionMode()
                         viewModel.goBack()
                     },
-                    modifier = Modifier.fillMaxWidth().height(40.dp),
-                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF4A5568))
+                    modifier = Modifier.fillMaxWidth().height(40.dp)
+                        .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                        .transformedHeight(this, transformationSpec),
+                    colors = solidButtonColors(Color(0xFF4A5568)),
+                    transformation = SurfaceTransformation(transformationSpec)
                 ) {
                     Text(Copy.REMOVE_FROM_LIST, fontSize = 12.sp, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
@@ -1523,8 +1699,11 @@ internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.Batch
         item {
             Button(
                 onClick = { shareItems(context, uiState.account?.serverUrl, selectedItems) },
-                modifier = Modifier.fillMaxWidth().height(40.dp),
-                colors = ButtonDefaults.secondaryButtonColors()
+                modifier = Modifier.fillMaxWidth().height(40.dp)
+                    .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                    .transformedHeight(this, transformationSpec),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer, contentColor = MaterialTheme.colorScheme.onSurface),
+                transformation = SurfaceTransformation(transformationSpec)
             ) {
                 Text(Copy.SHARE, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
@@ -1532,8 +1711,11 @@ internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.Batch
         item {
             Button(
                 onClick = { viewModel.selectAllItems(items) },
-                modifier = Modifier.fillMaxWidth().height(40.dp),
-                colors = ButtonDefaults.secondaryButtonColors()
+                modifier = Modifier.fillMaxWidth().height(40.dp)
+                    .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                    .transformedHeight(this, transformationSpec),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer, contentColor = MaterialTheme.colorScheme.onSurface),
+                transformation = SurfaceTransformation(transformationSpec)
             ) {
                 Text(Copy.SELECT_ALL, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
@@ -1544,8 +1726,11 @@ internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.Batch
                     viewModel.exitSelectionMode()
                     viewModel.goBack()
                 },
-                modifier = Modifier.fillMaxWidth().height(40.dp),
-                colors = ButtonDefaults.secondaryButtonColors()
+                modifier = Modifier.fillMaxWidth().height(40.dp)
+                    .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                    .transformedHeight(this, transformationSpec),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer, contentColor = MaterialTheme.colorScheme.onSurface),
+                transformation = SurfaceTransformation(transformationSpec)
             ) {
                 Text(Copy.SELECT_NONE, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
@@ -1557,8 +1742,11 @@ internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.Batch
                     // 反选后为 0：自动退出多选并离开本页
                     if (!viewModel.uiState.value.selection.active) viewModel.goBack()
                 },
-                modifier = Modifier.fillMaxWidth().height(40.dp),
-                colors = ButtonDefaults.secondaryButtonColors()
+                modifier = Modifier.fillMaxWidth().height(40.dp)
+                    .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                    .transformedHeight(this, transformationSpec),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer, contentColor = MaterialTheme.colorScheme.onSurface),
+                transformation = SurfaceTransformation(transformationSpec)
             ) {
                 Text(Copy.INVERT_SELECTION, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
@@ -1566,12 +1754,16 @@ internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.Batch
         item {
             Button(
                 onClick = { viewModel.goBack() },
-                modifier = Modifier.fillMaxWidth().height(36.dp),
-                colors = ButtonDefaults.secondaryButtonColors()
+                modifier = Modifier.fillMaxWidth().height(36.dp)
+                    .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                    .transformedHeight(this, transformationSpec),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer, contentColor = MaterialTheme.colorScheme.onSurface),
+                transformation = SurfaceTransformation(transformationSpec)
             ) {
                 Text("返回", fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
+    }
     }
 }
 
@@ -1582,22 +1774,28 @@ internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.Batch
  */
 @Composable
 internal fun ListActionsScreen(viewModel: AppViewModel, screen: AppScreen.ListActions) {
-    ScalingLazyColumn(
-        scalingParams = ListScalingParams,
+    val listState = rememberTransformingLazyColumnState()
+    val transformationSpec = rememberTransformationSpec()
+    ScreenScaffold(scrollState = listState) { contentPadding ->
+    TransformingLazyColumn(
+        contentPadding = contentPadding,
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
-        state = rememberScalingLazyListState(),
+        state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         item {
             Text(
                 text = screen.title,
-                style = MaterialTheme.typography.title3,
-                color = MaterialTheme.colors.primary,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
                 textAlign = TextAlign.Center,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 12.dp)
+                modifier = Modifier
+                    .padding(top = 12.dp)
+                    .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                    .transformedHeight(this, transformationSpec)
             )
         }
         items(screen.menu.items()) { entry ->
@@ -1609,13 +1807,16 @@ internal fun ListActionsScreen(viewModel: AppViewModel, screen: AppScreen.ListAc
             }
             Button(
                 onClick = { viewModel.onListMenuAction(screen.menu, entry.action) },
-                modifier = Modifier.fillMaxWidth().height(40.dp),
+                modifier = Modifier.fillMaxWidth().height(40.dp)
+                    .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                    .transformedHeight(this, transformationSpec),
                 colors = when (entry.action) {
-                    ListMenuAction.PLAY_ALL -> ButtonDefaults.primaryButtonColors()
+                    ListMenuAction.PLAY_ALL -> ButtonDefaults.buttonColors()
                     else -> background?.let {
-                        ButtonDefaults.buttonColors(backgroundColor = it)
-                    } ?: ButtonDefaults.secondaryButtonColors()
-                }
+                        solidButtonColors(it)
+                    } ?: ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer, contentColor = MaterialTheme.colorScheme.onSurface)
+                },
+                transformation = SurfaceTransformation(transformationSpec)
             ) {
                 if (entry.action == ListMenuAction.SHUFFLE_ALL) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1637,48 +1838,59 @@ internal fun ListActionsScreen(viewModel: AppViewModel, screen: AppScreen.ListAc
         item {
             Button(
                 onClick = { viewModel.goBack() },
-                modifier = Modifier.fillMaxWidth().height(38.dp),
-                colors = ButtonDefaults.secondaryButtonColors()
+                modifier = Modifier.fillMaxWidth().height(38.dp)
+                    .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                    .transformedHeight(this, transformationSpec),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer, contentColor = MaterialTheme.colorScheme.onSurface),
+                transformation = SurfaceTransformation(transformationSpec)
             ) {
                 Text("取消", fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }
+    }
 }
 
 @Composable
 internal fun SongInfoScreen(item: JellyfinItem) {
-    ScalingLazyColumn(
-        scalingParams = ListScalingParams,
+    val listState = rememberTransformingLazyColumnState()
+    val transformationSpec = rememberTransformationSpec()
+    ScreenScaffold(scrollState = listState) { contentPadding ->
+    TransformingLazyColumn(
+        contentPadding = contentPadding,
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
-        state = rememberScalingLazyListState(),
+        state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         item {
             Text(
                 text = Copy.SONG_INFO,
-                style = MaterialTheme.typography.title3,
-                color = MaterialTheme.colors.primary,
-                modifier = Modifier.padding(top = 12.dp)
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .padding(top = 12.dp)
+                    .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                    .transformedHeight(this, transformationSpec)
             )
         }
-        item { SongInfoRow("名称", item.name) }
-        item { SongInfoRow("艺人", item.artistText) }
-        item { SongInfoRow("专辑", item.album ?: "未知") }
-        item { SongInfoRow("时长", formatTime(item.durationMs)) }
-        item { SongInfoRow("格式", item.container ?: "未知") }
-        item { SongInfoRow("ID", item.id) }
+        item { SongInfoRow("名称", item.name, Modifier.minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding).transformedHeight(this, transformationSpec)) }
+        item { SongInfoRow("艺人", item.artistText, Modifier.minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding).transformedHeight(this, transformationSpec)) }
+        item { SongInfoRow("专辑", item.album ?: "未知", Modifier.minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding).transformedHeight(this, transformationSpec)) }
+        item { SongInfoRow("时长", formatTime(item.durationMs), Modifier.minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding).transformedHeight(this, transformationSpec)) }
+        item { SongInfoRow("格式", item.container ?: "未知", Modifier.minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding).transformedHeight(this, transformationSpec)) }
+        item { SongInfoRow("ID", item.id, Modifier.minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding).transformedHeight(this, transformationSpec)) }
+    }
     }
 }
 
 @Composable
-private fun SongInfoRow(label: String, value: String) {
+private fun SongInfoRow(label: String, value: String, modifier: Modifier = Modifier) {
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
-            .background(MaterialTheme.colors.surface)
+            .background(MaterialTheme.colorScheme.background)
             .padding(horizontal = 10.dp, vertical = 6.dp)
     ) {
         Text(text = label, fontSize = 9.sp, color = Color(0xFF8A93A5))
@@ -1708,7 +1920,8 @@ internal fun shareItems(context: Context, serverUrl: String?, items: List<Jellyf
 
 @Composable
 internal fun TrackDetailScreen(viewModel: AppViewModel, item: JellyfinItem, source: LibraryQuery) {
-    val listState = rememberScalingLazyListState()
+    val listState = rememberTransformingLazyColumnState()
+    val transformationSpec = rememberTransformationSpec()
     val downloadingIds by viewModel.downloadingIds.collectAsState()
     val downloadProgress by viewModel.downloadProgress.collectAsState()
     val isDownloading = item.id in downloadingIds
@@ -1718,8 +1931,9 @@ internal fun TrackDetailScreen(viewModel: AppViewModel, item: JellyfinItem, sour
     val context = LocalContext.current
     val uiState by viewModel.uiState.collectAsState()
 
-    ScalingLazyColumn(
-        scalingParams = ListScalingParams,
+    ScreenScaffold(scrollState = listState) { contentPadding ->
+    TransformingLazyColumn(
+        contentPadding = contentPadding,
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
         state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1728,26 +1942,35 @@ internal fun TrackDetailScreen(viewModel: AppViewModel, item: JellyfinItem, sour
         item {
             Text(
                 text = item.name,
-                style = MaterialTheme.typography.title3,
+                style = MaterialTheme.typography.titleSmall,
                 textAlign = TextAlign.Center,
-                modifier = Modifier.padding(top = 16.dp)
+                modifier = Modifier
+                    .padding(top = 16.dp)
+                    .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                    .transformedHeight(this, transformationSpec)
             )
         }
 
         item {
             Text(
                 text = item.artistText,
-                style = MaterialTheme.typography.caption1,
+                style = MaterialTheme.typography.labelMedium,
                 color = Color.Gray,
-                textAlign = TextAlign.Center
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                    .transformedHeight(this, transformationSpec)
             )
         }
 
         item {
             Button(
                 onClick = { viewModel.playTrack(item) },
-                modifier = Modifier.fillMaxWidth().height(42.dp),
-                colors = ButtonDefaults.primaryButtonColors()
+                modifier = Modifier.fillMaxWidth().height(42.dp)
+                    .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                    .transformedHeight(this, transformationSpec),
+                colors = ButtonDefaults.buttonColors(),
+                transformation = SurfaceTransformation(transformationSpec)
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.PlayArrow, contentDescription = null)
@@ -1760,8 +1983,11 @@ internal fun TrackDetailScreen(viewModel: AppViewModel, item: JellyfinItem, sour
         item {
             Button(
                 onClick = { viewModel.playItemsNext(listOf(item)); viewModel.goBack() },
-                modifier = Modifier.fillMaxWidth().height(42.dp),
-                colors = ButtonDefaults.secondaryButtonColors()
+                modifier = Modifier.fillMaxWidth().height(42.dp)
+                    .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                    .transformedHeight(this, transformationSpec),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer, contentColor = MaterialTheme.colorScheme.onSurface),
+                transformation = SurfaceTransformation(transformationSpec)
             ) {
                 Text(Copy.PLAY_NEXT, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
@@ -1770,8 +1996,11 @@ internal fun TrackDetailScreen(viewModel: AppViewModel, item: JellyfinItem, sour
         item {
             Button(
                 onClick = { viewModel.enqueue(item); viewModel.goBack() },
-                modifier = Modifier.fillMaxWidth().height(42.dp),
-                colors = ButtonDefaults.secondaryButtonColors()
+                modifier = Modifier.fillMaxWidth().height(42.dp)
+                    .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                    .transformedHeight(this, transformationSpec),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer, contentColor = MaterialTheme.colorScheme.onSurface),
+                transformation = SurfaceTransformation(transformationSpec)
             ) {
                 Text(Copy.ADD_TO_QUEUE, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
@@ -1781,8 +2010,11 @@ internal fun TrackDetailScreen(viewModel: AppViewModel, item: JellyfinItem, sour
             item {
                 Button(
                     onClick = { viewModel.playLoaded(source, item.id) },
-                    modifier = Modifier.fillMaxWidth().height(42.dp),
-                    colors = ButtonDefaults.secondaryButtonColors()
+                    modifier = Modifier.fillMaxWidth().height(42.dp)
+                        .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                        .transformedHeight(this, transformationSpec),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer, contentColor = MaterialTheme.colorScheme.onSurface),
+                    transformation = SurfaceTransformation(transformationSpec)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = null)
@@ -1797,8 +2029,11 @@ internal fun TrackDetailScreen(viewModel: AppViewModel, item: JellyfinItem, sour
             Button(
                 onClick = { viewModel.downloadTrack(item); viewModel.goBack() },
                 enabled = !isDownloading && !isDownloaded,
-                modifier = Modifier.fillMaxWidth().height(42.dp),
-                colors = ButtonDefaults.secondaryButtonColors()
+                modifier = Modifier.fillMaxWidth().height(42.dp)
+                    .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                    .transformedHeight(this, transformationSpec),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer, contentColor = MaterialTheme.colorScheme.onSurface),
+                transformation = SurfaceTransformation(transformationSpec)
             ) {
                 if (isDownloading) {
                     Column(
@@ -1813,7 +2048,7 @@ internal fun TrackDetailScreen(viewModel: AppViewModel, item: JellyfinItem, sour
                             ) {
                                 Box(
                                     modifier = Modifier.fillMaxWidth(fraction).height(5.dp)
-                                        .background(MaterialTheme.colors.primary)
+                                        .background(MaterialTheme.colorScheme.primary)
                                 )
                             }
                             Spacer(Modifier.height(3.dp))
@@ -1842,8 +2077,11 @@ internal fun TrackDetailScreen(viewModel: AppViewModel, item: JellyfinItem, sour
             item {
                 Button(
                     onClick = { viewModel.deleteDownloadedTrack(item.id) },
-                    modifier = Modifier.fillMaxWidth().height(42.dp),
-                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF4A5568))
+                    modifier = Modifier.fillMaxWidth().height(42.dp)
+                        .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                        .transformedHeight(this, transformationSpec),
+                    colors = solidButtonColors(Color(0xFF4A5568)),
+                    transformation = SurfaceTransformation(transformationSpec)
                 ) {
                     Text(Copy.DELETE_THIS_CACHE, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
@@ -1853,8 +2091,11 @@ internal fun TrackDetailScreen(viewModel: AppViewModel, item: JellyfinItem, sour
         item {
             Button(
                 onClick = { viewModel.navigate(AppScreen.SongInfo(item)) },
-                modifier = Modifier.fillMaxWidth().height(42.dp),
-                colors = ButtonDefaults.secondaryButtonColors()
+                modifier = Modifier.fillMaxWidth().height(42.dp)
+                    .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                    .transformedHeight(this, transformationSpec),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer, contentColor = MaterialTheme.colorScheme.onSurface),
+                transformation = SurfaceTransformation(transformationSpec)
             ) {
                 Text(Copy.SONG_INFO, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
@@ -1863,8 +2104,11 @@ internal fun TrackDetailScreen(viewModel: AppViewModel, item: JellyfinItem, sour
         item {
             Button(
                 onClick = { shareItems(context, uiState.account?.serverUrl, listOf(item)); viewModel.goBack() },
-                modifier = Modifier.fillMaxWidth().height(42.dp),
-                colors = ButtonDefaults.secondaryButtonColors()
+                modifier = Modifier.fillMaxWidth().height(42.dp)
+                    .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                    .transformedHeight(this, transformationSpec),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer, contentColor = MaterialTheme.colorScheme.onSurface),
+                transformation = SurfaceTransformation(transformationSpec)
             ) {
                 Text(Copy.SHARE, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
@@ -1877,13 +2121,17 @@ internal fun TrackDetailScreen(viewModel: AppViewModel, item: JellyfinItem, sour
                         viewModel.removeFromLibraryView(source, setOf(item.id))
                         viewModel.goBack()
                     },
-                    modifier = Modifier.fillMaxWidth().height(42.dp),
-                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF4A5568))
+                    modifier = Modifier.fillMaxWidth().height(42.dp)
+                        .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                        .transformedHeight(this, transformationSpec),
+                    colors = solidButtonColors(Color(0xFF4A5568)),
+                    transformation = SurfaceTransformation(transformationSpec)
                 ) {
                     Text(Copy.REMOVE_FROM_LIST, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
+    }
     }
 }
 
@@ -1891,15 +2139,17 @@ internal fun TrackDetailScreen(viewModel: AppViewModel, item: JellyfinItem, sour
 internal fun PlayerScreen(viewModel: AppViewModel) {
     val pbState by viewModel.playbackState.collectAsState()
     val cachedIds by viewModel.cachedTrackIds.collectAsState()
-    val listState = rememberScalingLazyListState()
+    val listState = rememberTransformingLazyColumnState()
+    val transformationSpec = rememberTransformationSpec()
     val item = pbState.current
     // 播放结束：按钮变重播（Media3 play() 在 STATE_ENDED 从头播放）
     val durationMs = pbState.effectiveDurationMs
     val ended = durationMs > 0 && !pbState.isPlaying && !pbState.buffering &&
         pbState.positionMs >= durationMs - 300
 
-    ScalingLazyColumn(
-        scalingParams = ListScalingParams,
+    ScreenScaffold(scrollState = listState) { contentPadding ->
+    TransformingLazyColumn(
+        contentPadding = contentPadding,
         modifier = Modifier
             .fillMaxSize()
             .padding(horizontal = 8.dp)
@@ -1910,7 +2160,12 @@ internal fun PlayerScreen(viewModel: AppViewModel) {
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         item {
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(
+                modifier = Modifier
+                    .height(8.dp)
+                    .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                    .transformedHeight(this, transformationSpec)
+            )
         }
 
         item {
@@ -1918,6 +2173,8 @@ internal fun PlayerScreen(viewModel: AppViewModel) {
             Box(
                 modifier = Modifier
                     .size(90.dp)
+                    .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                    .transformedHeight(this, transformationSpec)
                     .clip(RoundedCornerShape(12.dp))
                     .background(Color.DarkGray),
                 contentAlignment = Alignment.Center
@@ -1936,17 +2193,22 @@ internal fun PlayerScreen(viewModel: AppViewModel) {
         }
 
         item {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                    .transformedHeight(this, transformationSpec)
+            ) {
                 Text(
                     text = item?.name ?: "未播放",
-                    style = MaterialTheme.typography.title3,
+                    style = MaterialTheme.typography.titleSmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.Center
                 )
                 Text(
                     text = item?.artistText ?: "Jellyfin",
-                    style = MaterialTheme.typography.caption2,
+                    style = MaterialTheme.typography.labelSmall,
                     color = Color.Gray,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -1967,10 +2229,15 @@ internal fun PlayerScreen(viewModel: AppViewModel) {
 
         if (pbState.buffering) {
             item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                        .transformedHeight(this, transformationSpec)
+                ) {
                     CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
                     Spacer(Modifier.width(8.dp))
-                    Text("正在缓冲音乐...", color = MaterialTheme.colors.primary, fontSize = 12.sp)
+                    Text("正在缓冲音乐...", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
                 }
             }
         }
@@ -1979,9 +2246,12 @@ internal fun PlayerScreen(viewModel: AppViewModel) {
             item {
                 Text(
                     text = pbState.error ?: "播放失败",
-                    color = MaterialTheme.colors.error,
+                    color = MaterialTheme.colorScheme.error,
                     fontSize = 11.sp,
-                    textAlign = TextAlign.Center
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                        .transformedHeight(this, transformationSpec)
                 )
             }
         }
@@ -1993,7 +2263,10 @@ internal fun PlayerScreen(viewModel: AppViewModel) {
                 bufferedPositionMs = pbState.bufferedPositionMs,
                 buffering = pbState.buffering,
                 onSeek = { viewModel.seekTo(it) },
-                modifier = Modifier.padding(horizontal = 6.dp)
+                modifier = Modifier
+                    .padding(horizontal = 6.dp)
+                    .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                    .transformedHeight(this, transformationSpec)
             )
         }
 
@@ -2001,12 +2274,15 @@ internal fun PlayerScreen(viewModel: AppViewModel) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                    .transformedHeight(this, transformationSpec)
             ) {
                 Button(
                     onClick = { viewModel.previous() },
                     modifier = Modifier.size(36.dp),
-                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF4A5568))
+                    colors = solidButtonColors(Color(0xFF4A5568))
                 ) {
                     Icon(Icons.Default.SkipPrevious, contentDescription = null, modifier = Modifier.size(20.dp), tint = Color.White)
                 }
@@ -2023,7 +2299,7 @@ internal fun PlayerScreen(viewModel: AppViewModel) {
                         }
                     },
                     modifier = Modifier.size(48.dp),
-                    colors = ButtonDefaults.primaryButtonColors()
+                    colors = ButtonDefaults.buttonColors()
                 ) {
                     Icon(
                         imageVector = when {
@@ -2033,7 +2309,7 @@ internal fun PlayerScreen(viewModel: AppViewModel) {
                         },
                         contentDescription = if (ended) "重播" else null,
                         modifier = Modifier.size(28.dp),
-                        tint = MaterialTheme.colors.onPrimary
+                        tint = MaterialTheme.colorScheme.onPrimary
                     )
                 }
 
@@ -2042,7 +2318,7 @@ internal fun PlayerScreen(viewModel: AppViewModel) {
                 Button(
                     onClick = { viewModel.next() },
                     modifier = Modifier.size(36.dp),
-                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF4A5568))
+                    colors = solidButtonColors(Color(0xFF4A5568))
                 ) {
                     Icon(Icons.Default.SkipNext, contentDescription = null, modifier = Modifier.size(20.dp), tint = Color.White)
                 }
@@ -2050,7 +2326,12 @@ internal fun PlayerScreen(viewModel: AppViewModel) {
         }
 
         item {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                    .transformedHeight(this, transformationSpec)
+            ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.Center,
@@ -2059,7 +2340,7 @@ internal fun PlayerScreen(viewModel: AppViewModel) {
                     Button(
                         onClick = { viewModel.adjustVolume(-1) },
                         modifier = Modifier.size(36.dp),
-                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF3A3F4B))
+                        colors = solidButtonColors(Color(0xFF3A3F4B))
                     ) {
                         Icon(Icons.Default.KeyboardArrowDown, contentDescription = "减小音量", modifier = Modifier.size(20.dp), tint = Color.White)
                     }
@@ -2067,24 +2348,24 @@ internal fun PlayerScreen(viewModel: AppViewModel) {
                     Button(
                         onClick = { viewModel.toggleShuffle() },
                         modifier = Modifier.size(36.dp),
-                        colors = if (pbState.shuffleEnabled) ButtonDefaults.primaryButtonColors() else ButtonDefaults.buttonColors(backgroundColor = Color(0xFF3A3F4B))
+                        colors = if (pbState.shuffleEnabled) ButtonDefaults.buttonColors() else solidButtonColors(Color(0xFF3A3F4B))
                     ) {
-                        Icon(Icons.Default.Shuffle, contentDescription = null, modifier = Modifier.size(18.dp), tint = if (pbState.shuffleEnabled) MaterialTheme.colors.onPrimary else Color.White)
+                        Icon(Icons.Default.Shuffle, contentDescription = null, modifier = Modifier.size(18.dp), tint = if (pbState.shuffleEnabled) MaterialTheme.colorScheme.onPrimary else Color.White)
                     }
                     Spacer(modifier = Modifier.width(10.dp))
                     Button(
                         onClick = { viewModel.cycleRepeatMode() },
                         modifier = Modifier.size(36.dp),
-                        colors = if (pbState.repeatMode != Player.REPEAT_MODE_OFF) ButtonDefaults.primaryButtonColors() else ButtonDefaults.buttonColors(backgroundColor = Color(0xFF3A3F4B))
+                        colors = if (pbState.repeatMode != Player.REPEAT_MODE_OFF) ButtonDefaults.buttonColors() else solidButtonColors(Color(0xFF3A3F4B))
                     ) {
                         val icon = if (pbState.repeatMode == Player.REPEAT_MODE_ONE) Icons.Default.RepeatOne else Icons.Default.Repeat
-                        Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp), tint = if (pbState.repeatMode != Player.REPEAT_MODE_OFF) MaterialTheme.colors.onPrimary else Color.White)
+                        Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp), tint = if (pbState.repeatMode != Player.REPEAT_MODE_OFF) MaterialTheme.colorScheme.onPrimary else Color.White)
                     }
                     Spacer(modifier = Modifier.width(10.dp))
                     Button(
                         onClick = { viewModel.adjustVolume(1) },
                         modifier = Modifier.size(36.dp),
-                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF3A3F4B))
+                        colors = solidButtonColors(Color(0xFF3A3F4B))
                     ) {
                         Icon(Icons.Default.KeyboardArrowUp, contentDescription = "增大音量", modifier = Modifier.size(20.dp), tint = Color.White)
                     }
@@ -2102,16 +2383,25 @@ internal fun PlayerScreen(viewModel: AppViewModel) {
             // 歌词按钮已删（REQ-HOME-SEEK-001 决策）：左滑是进入歌词页的唯一入口
             Button(
                 onClick = { viewModel.navigate(AppScreen.Queue) },
-                modifier = Modifier.height(34.dp),
-                colors = ButtonDefaults.secondaryButtonColors()
+                modifier = Modifier.height(34.dp)
+                    .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                    .transformedHeight(this, transformationSpec),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer, contentColor = MaterialTheme.colorScheme.onSurface),
+                transformation = SurfaceTransformation(transformationSpec)
             ) {
                 Text("队列 (${pbState.queue.size})", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
 
         item {
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(
+                modifier = Modifier
+                    .height(8.dp)
+                    .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                    .transformedHeight(this, transformationSpec)
+            )
         }
+    }
     }
 }
 
@@ -2122,7 +2412,8 @@ internal fun QueueScreen(viewModel: AppViewModel) {
     val uiState by viewModel.uiState.collectAsState()
     val selectedIds = uiState.selectedSongIds
     val selectionMode = uiState.selectionMode
-    val listState = rememberScalingLazyListState()
+    val listState = rememberTransformingLazyColumnState()
+    val transformationSpec = rememberTransformationSpec()
     val queueItems = remember(pbState.queue) { pbState.queue.map { it.item } }
     rememberSongListAnchor(
         listState,
@@ -2132,8 +2423,9 @@ internal fun QueueScreen(viewModel: AppViewModel) {
     )
 
     Box(Modifier.fillMaxSize()) {
-        ScalingLazyColumn(
-        scalingParams = ListScalingParams,
+        ScreenScaffold(scrollState = listState) { contentPadding ->
+        TransformingLazyColumn(
+        contentPadding = contentPadding,
         modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp),
         state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -2142,17 +2434,23 @@ internal fun QueueScreen(viewModel: AppViewModel) {
         item {
             Text(
                 text = "播放队列",
-                style = MaterialTheme.typography.title3,
-                color = MaterialTheme.colors.primary,
-                modifier = Modifier.padding(top = 12.dp)
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .padding(top = 12.dp)
+                    .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                    .transformedHeight(this, transformationSpec)
             )
         }
 
         item {
             Button(
                 onClick = { viewModel.requestConfirmation(ConfirmAction.CLEAR_QUEUE) },
-                modifier = Modifier.fillMaxWidth(0.8f).height(36.dp),
-                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF4A1515))
+                modifier = Modifier.fillMaxWidth(0.8f).height(36.dp)
+                    .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                    .transformedHeight(this, transformationSpec),
+                colors = solidButtonColors(Color(0xFF4A1515)),
+                transformation = SurfaceTransformation(transformationSpec)
             ) {
                 Text("清空队列", fontSize = 12.sp, color = Color.White)
             }
@@ -2160,19 +2458,29 @@ internal fun QueueScreen(viewModel: AppViewModel) {
 
         if (pbState.queue.isEmpty()) {
             item {
-                Text("队列为空", color = Color.Gray, style = MaterialTheme.typography.caption2)
+                Text(
+                    "队列为空",
+                    color = Color.Gray,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier
+                        .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                        .transformedHeight(this, transformationSpec)
+                )
             }
         } else {
             itemsIndexed(pbState.queue) { index, track ->
                 val item = track.item
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                        .transformedHeight(this, transformationSpec),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
                         text = "${index + 1}.",
                         fontSize = 11.sp,
-                        color = if (index == pbState.currentIndex) MaterialTheme.colors.primary else Color.Gray,
+                        color = if (index == pbState.currentIndex) MaterialTheme.colorScheme.primary else Color.Gray,
                         modifier = Modifier.width(24.dp)
                     )
                     LibraryItemRow(
@@ -2203,9 +2511,17 @@ internal fun QueueScreen(viewModel: AppViewModel) {
             }
         }
         if (selectionMode && pbState.queue.isNotEmpty()) {
-            item { Spacer(Modifier.height(56.dp)) }
+            item {
+                Spacer(
+                    Modifier
+                        .height(56.dp)
+                        .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                        .transformedHeight(this, transformationSpec)
+                )
+            }
         }
     }
+        }
     if (selectionMode) {
         MultiSelectBar(
             selectedCount = selectedIds.size,
@@ -2228,7 +2544,8 @@ internal fun QueueScreen(viewModel: AppViewModel) {
 @Composable
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 internal fun DownloadsScreen(viewModel: AppViewModel) {
-    val listState = rememberScalingLazyListState()
+    val listState = rememberTransformingLazyColumnState()
+    val transformationSpec = rememberTransformationSpec()
     val items by viewModel.downloadManagementItems.collectAsState()
     val pbState by viewModel.playbackState.collectAsState()
     val queue by viewModel.downloadQueue.collectAsState()
@@ -2245,32 +2562,40 @@ internal fun DownloadsScreen(viewModel: AppViewModel) {
         (if (queue.isNotEmpty() && sectionExpanded) queue.size else 0)
     rememberSongListAnchor(listState, items, headerItems)
 
-    ScalingLazyColumn(
-        scalingParams = ListScalingParams,
+    ScreenScaffold(scrollState = listState) { contentPadding ->
+    TransformingLazyColumn(
+        contentPadding = contentPadding,
         modifier = Modifier.fillMaxSize().padding(start = 14.dp, end = LIST_END_PADDING_DP.dp),
         state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         item {
-            Text("下载管理", style = MaterialTheme.typography.title3,
-                color = MaterialTheme.colors.primary, modifier = Modifier.padding(top = 12.dp))
+            Text("下载管理", style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary, modifier = Modifier
+                    .padding(top = 12.dp)
+                    .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                    .transformedHeight(this, transformationSpec))
         }
         if (queue.isNotEmpty()) {
             item {
                 Text("缓存队列 (${queue.size}) " + if (sectionExpanded) "▲" else "▼",
                     fontSize = 11.sp, color = Color(0xFF8A93A5), textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth().clickable { sectionExpanded = !sectionExpanded }.padding(vertical = 4.dp))
+                    modifier = Modifier.fillMaxWidth().clickable { sectionExpanded = !sectionExpanded }.padding(vertical = 4.dp)
+                        .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                        .transformedHeight(this, transformationSpec))
             }
             if (sectionExpanded) {
                 items(queue) { entry ->
                     Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
-                        .background(Color(0xFF14202F)).padding(horizontal = 10.dp, vertical = 6.dp)) {
+                        .background(Color(0xFF14202F)).padding(horizontal = 10.dp, vertical = 6.dp)
+                        .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                        .transformedHeight(this, transformationSpec)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             when (entry.status) {
                                 dev.wearjelly.data.DownloadStatus.RUNNING -> CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 2.dp)
                                 dev.wearjelly.data.DownloadStatus.DONE -> Text("✓", color = Color(0xFF7BD88F), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                dev.wearjelly.data.DownloadStatus.FAILED -> Text("✗", color = MaterialTheme.colors.error, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                dev.wearjelly.data.DownloadStatus.FAILED -> Text("✗", color = MaterialTheme.colorScheme.error, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                 dev.wearjelly.data.DownloadStatus.WAITING -> Text("…", color = Color(0xFF8A93A5), fontSize = 12.sp)
                             }
                             Spacer(Modifier.width(6.dp))
@@ -2281,7 +2606,7 @@ internal fun DownloadsScreen(viewModel: AppViewModel) {
                             val fraction = entry.totalBytes.takeIf { it > 0 }?.let { entry.downloadedBytes.toFloat() / it }
                             if (fraction != null) {
                                 Spacer(Modifier.height(3.dp))
-                                Box(Modifier.fillMaxWidth().height(4.dp).background(Color.DarkGray)) { Box(Modifier.fillMaxWidth(fraction.coerceIn(0f, 1f)).fillMaxHeight().background(MaterialTheme.colors.primary)) }
+                                Box(Modifier.fillMaxWidth().height(4.dp).background(Color.DarkGray)) { Box(Modifier.fillMaxWidth(fraction.coerceIn(0f, 1f)).fillMaxHeight().background(MaterialTheme.colorScheme.primary)) }
                                 Text("${entry.qualityLabel} · ${(fraction * 100).toInt()}% · ${formatBytes(entry.downloadedBytes)}", fontSize = 9.sp, color = Color.LightGray)
                             }
                         } else if (entry.status == dev.wearjelly.data.DownloadStatus.WAITING) {
@@ -2294,10 +2619,21 @@ internal fun DownloadsScreen(viewModel: AppViewModel) {
             }
         }
         if (items.isEmpty()) {
-            item { Text(if (offline) "暂无歌曲元数据" else "暂无下载记录", color = Color.Gray, fontSize = 12.sp) }
+            item {
+                Text(
+                    if (offline) "暂无歌曲元数据" else "暂无下载记录",
+                    color = Color.Gray,
+                    fontSize = 12.sp,
+                    modifier = Modifier
+                        .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                        .transformedHeight(this, transformationSpec)
+                )
+            }
         } else {
             itemsIndexed(items) { _, item ->
                 LibraryItemRow(item = item, query = LibraryQuery(LibraryKind.DOWNLOADS),
+                    modifier = Modifier.minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                        .transformedHeight(this, transformationSpec),
                     selected = item.id in selectedIds, selectionMode = selectionMode,
                     isCurrent = pbState.current?.id == item.id, isPlaying = pbState.isPlaying,
                     cached = item.id in cachedIds, offline = offline,
@@ -2307,13 +2643,24 @@ internal fun DownloadsScreen(viewModel: AppViewModel) {
                     onSwipeLeft = { if (selectionMode) viewModel.selectRangeFromSwipe(item.id, items.map { it.id }) else viewModel.beginSelectionFromSwipe(item.id) })
             }
         }
-        if (selectionMode && items.isNotEmpty()) { item { Spacer(Modifier.height(56.dp)) } }
+        if (selectionMode && items.isNotEmpty()) {
+            item {
+                Spacer(
+                    Modifier
+                        .height(56.dp)
+                        .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                        .transformedHeight(this, transformationSpec)
+                )
+            }
+        }
+    }
     }
 }
 @Composable
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 internal fun HistoryScreen(viewModel: AppViewModel) {
-    val listState = rememberScalingLazyListState()
+    val listState = rememberTransformingLazyColumnState()
+    val transformationSpec = rememberTransformationSpec()
     val history by viewModel.history.collectAsState()
     val pbState by viewModel.playbackState.collectAsState()
     val uiState by viewModel.uiState.collectAsState()
@@ -2323,6 +2670,7 @@ internal fun HistoryScreen(viewModel: AppViewModel) {
     val historyItems = remember(history) { history.map { it.item } }
     rememberSongListAnchor(listState, historyItems, headerItems = 1)
 
+    ScreenScaffold(scrollState = listState) { contentPadding ->
     AlphabetListScaffold(
         items = historyItems,
         listState = listState,
@@ -2346,8 +2694,8 @@ internal fun HistoryScreen(viewModel: AppViewModel) {
             }
         }
     ) { scaleModifier ->
-    ScalingLazyColumn(
-        scalingParams = ListScalingParams,
+    TransformingLazyColumn(
+        contentPadding = contentPadding,
         modifier = scaleModifier.fillMaxSize().padding(horizontal = 8.dp),
         state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -2356,19 +2704,33 @@ internal fun HistoryScreen(viewModel: AppViewModel) {
         item {
             Text(
                 text = "播放历史",
-                style = MaterialTheme.typography.title3,
-                color = MaterialTheme.colors.primary,
-                modifier = Modifier.padding(top = 12.dp)
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .padding(top = 12.dp)
+                    .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                    .transformedHeight(this, transformationSpec)
             )
         }
         if (history.isEmpty()) {
-            item { Text("暂无播放记录", color = Color.Gray, fontSize = 12.sp) }
+            item {
+                Text(
+                    "暂无播放记录",
+                    color = Color.Gray,
+                    fontSize = 12.sp,
+                    modifier = Modifier
+                        .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                        .transformedHeight(this, transformationSpec)
+                )
+            }
         } else {
             itemsIndexed(history) { index, entry ->
                 val item = entry.item
                 LibraryItemRow(
                     item = item,
                     query = LibraryQuery(LibraryKind.SONGS),
+                    modifier = Modifier.minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                        .transformedHeight(this, transformationSpec),
                     selected = item.id in selectedIds,
                     selectionMode = selectionMode,
                     isCurrent = pbState.current?.id == item.id,
@@ -2391,19 +2753,29 @@ internal fun HistoryScreen(viewModel: AppViewModel) {
             }
         }
         if (selectionMode && history.isNotEmpty()) {
-            item { Spacer(Modifier.height(56.dp)) }
+            item {
+                Spacer(
+                    Modifier
+                        .height(56.dp)
+                        .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                        .transformedHeight(this, transformationSpec)
+                )
+            }
         }
+    }
     }
     }
 }
 
 @Composable
 internal fun SettingsScreen(viewModel: AppViewModel, account: AccountUi?) {
-    val listState = rememberScalingLazyListState()
+    val listState = rememberTransformingLazyColumnState()
+    val transformationSpec = rememberTransformationSpec()
     val currentBitrate by viewModel.bitrate.collectAsState()
 
-    ScalingLazyColumn(
-        scalingParams = ListScalingParams,
+    ScreenScaffold(scrollState = listState) { contentPadding ->
+    TransformingLazyColumn(
+        contentPadding = contentPadding,
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
         state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -2412,20 +2784,28 @@ internal fun SettingsScreen(viewModel: AppViewModel, account: AccountUi?) {
         item {
             Text(
                 text = "设置",
-                style = MaterialTheme.typography.title3,
-                color = MaterialTheme.colors.primary,
-                modifier = Modifier.padding(top = 16.dp)
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .padding(top = 16.dp)
+                    .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                    .transformedHeight(this, transformationSpec)
             )
         }
 
         if (account != null) {
             item {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("当前用户", style = MaterialTheme.typography.caption2, color = Color.Gray)
-                    Text(account.userName, style = MaterialTheme.typography.body2)
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                        .transformedHeight(this, transformationSpec)
+                ) {
+                    Text("当前用户", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                    Text(account.userName, style = MaterialTheme.typography.bodyMedium)
                     Spacer(Modifier.height(4.dp))
-                    Text("服务器", style = MaterialTheme.typography.caption2, color = Color.Gray)
-                    Text(account.serverUrl, style = MaterialTheme.typography.caption2, color = Color.LightGray, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("服务器", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                    Text(account.serverUrl, style = MaterialTheme.typography.labelSmall, color = Color.LightGray, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
@@ -2433,20 +2813,26 @@ internal fun SettingsScreen(viewModel: AppViewModel, account: AccountUi?) {
         item {
             Text(
                 text = "在线播放音质",
-                style = MaterialTheme.typography.caption1,
-                color = Color.LightGray
+                style = MaterialTheme.typography.labelMedium,
+                color = Color.LightGray,
+                modifier = Modifier
+                    .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                    .transformedHeight(this, transformationSpec)
             )
         }
 
-        items(dev.wearjelly.data.AudioBitrate.entries.toTypedArray()) { bitrate ->
+        items(dev.wearjelly.data.AudioBitrate.entries) { bitrate ->
             Button(
                 onClick = { viewModel.setAudioBitrate(bitrate) },
-                modifier = Modifier.fillMaxWidth().height(40.dp),
+                modifier = Modifier.fillMaxWidth().height(40.dp)
+                    .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                    .transformedHeight(this, transformationSpec),
                 colors = if (currentBitrate == bitrate) {
-                    ButtonDefaults.primaryButtonColors()
+                    ButtonDefaults.buttonColors()
                 } else {
-                    ButtonDefaults.secondaryButtonColors()
-                }
+                    ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer, contentColor = MaterialTheme.colorScheme.onSurface)
+                },
+                transformation = SurfaceTransformation(transformationSpec)
             ) {
                 Text(
                     text = if (currentBitrate == bitrate) "✓ ${bitrate.displayName}" else bitrate.displayName,
@@ -2461,15 +2847,21 @@ internal fun SettingsScreen(viewModel: AppViewModel, account: AccountUi?) {
                 text = "转码仅影响新开始的在线播放",
                 fontSize = 9.sp,
                 color = Color.Gray,
-                textAlign = TextAlign.Center
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
+                    .transformedHeight(this, transformationSpec)
             )
         }
 
         item {
             Button(
                 onClick = { viewModel.requestConfirmation(ConfirmAction.SWITCH_SERVER) },
-                modifier = Modifier.fillMaxWidth().height(40.dp),
-                colors = ButtonDefaults.secondaryButtonColors()
+                modifier = Modifier.fillMaxWidth().height(40.dp)
+                    .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                    .transformedHeight(this, transformationSpec),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer, contentColor = MaterialTheme.colorScheme.onSurface),
+                transformation = SurfaceTransformation(transformationSpec)
             ) {
                 Text("切换服务器")
             }
@@ -2478,12 +2870,16 @@ internal fun SettingsScreen(viewModel: AppViewModel, account: AccountUi?) {
         item {
             Button(
                 onClick = { viewModel.requestConfirmation(ConfirmAction.LOGOUT) },
-                modifier = Modifier.fillMaxWidth().height(40.dp),
-                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF6B1B1B))
+                modifier = Modifier.fillMaxWidth().height(40.dp)
+                    .minimumVerticalContentPadding(ButtonDefaults.minimumVerticalListContentPadding)
+                    .transformedHeight(this, transformationSpec),
+                colors = solidButtonColors(Color(0xFF6B1B1B)),
+                transformation = SurfaceTransformation(transformationSpec)
             ) {
                 Text("退出登录", color = Color.White)
             }
         }
+    }
     }
 }
 
@@ -2518,7 +2914,7 @@ internal fun ConfirmScreen(
     ) {
         Text(
             text = title,
-            style = MaterialTheme.typography.body2,
+            style = MaterialTheme.typography.bodyMedium,
             textAlign = TextAlign.Center
         )
         Spacer(modifier = Modifier.height(16.dp))
@@ -2528,14 +2924,14 @@ internal fun ConfirmScreen(
             Button(
                 onClick = { viewModel.goBack() },
                 modifier = Modifier.size(44.dp),
-                colors = ButtonDefaults.secondaryButtonColors()
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer, contentColor = MaterialTheme.colorScheme.onSurface)
             ) {
                 Text("否")
             }
             Button(
                 onClick = { viewModel.confirm(action, query, menu) },
                 modifier = Modifier.size(44.dp),
-                colors = ButtonDefaults.primaryButtonColors()
+                colors = ButtonDefaults.buttonColors()
             ) {
                 Text("是")
             }

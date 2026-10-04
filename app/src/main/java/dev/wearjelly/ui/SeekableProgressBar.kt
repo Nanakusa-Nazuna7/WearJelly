@@ -20,8 +20,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.wear.compose.material.MaterialTheme
-import androidx.wear.compose.material.Text
+import androidx.wear.compose.material3.MaterialTheme
+import androidx.wear.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -142,7 +142,7 @@ internal fun SeekableProgressBar(
                             .fillMaxWidth(0.25f)
                             .offset(x = with(density) { (phase * barWidthPx).toDp() })
                             .height(5.dp)
-                            .background(MaterialTheme.colors.primary)
+                            .background(MaterialTheme.colorScheme.primary)
                     )
                 } else {
                     Box(
@@ -155,7 +155,7 @@ internal fun SeekableProgressBar(
                         modifier = Modifier
                             .fillMaxWidth(playedFraction)
                             .height(5.dp)
-                            .background(MaterialTheme.colors.primary)
+                            .background(MaterialTheme.colorScheme.primary)
                     )
                 }
             }
