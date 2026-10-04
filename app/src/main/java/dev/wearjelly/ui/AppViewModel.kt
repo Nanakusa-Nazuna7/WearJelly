@@ -340,26 +340,7 @@ class AppViewModel(
         libraryJobs[query] = viewModelScope.launch {
             try {
                 if (offlineMode) {
-                    val offset = if (fromStart) 0 else old.nextOffset
-                    val page = offlineReader.page(
-                        query.kind,
-                        query.playlistId,
-                        query.parentId,
-                        query.artistId,
-                        offset,
-                        PAGE_SIZE
-                    )
-                    val items = if (fromStart) page.items else old.items + page.items
-                    val ordered = if (query.playlistId != null) {
-                        items
-                    } else {
-                        dev.wearjelly.data.PinyinSort.sort(items.distinctBy { it.id })
-                    }
-                    updateLibrary(query) {
-                        copy(items = ordered, total = page.totalRecordCount, nextOffset = ordered.size,
-                            loading = false, loaded = true, endReached = ordered.size >= page.totalRecordCount,
-                            error = null)
-                    }
+                    loadOfflineLibrary(query, fromStart, old)
                     return@launch
                 }
                 // 全量拉取后按英文/拼音首字母 A-Z# 本地排序，保证字母条顺序正确
@@ -401,11 +382,41 @@ class AppViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                if (requestGeneration == generation) {
+                if (requestGeneration == generation && !offlineMode && offlineReader.hasSnapshot() && isNetworkFailure(error)) {
+                    offlineMode = true
+                    loadOfflineLibrary(query, fromStart, old)
+                } else if (requestGeneration == generation) {
                     updateLibrary(query) { copy(loading = false, error = userMessage(error)) }
                 }
             }
         }
+    }
+
+    private suspend fun loadOfflineLibrary(query: LibraryQuery, fromStart: Boolean, old: LibraryUi) {
+        val offset = if (fromStart) 0 else old.nextOffset
+        val page = offlineReader.page(query.kind, query.playlistId, query.parentId, query.artistId, offset, PAGE_SIZE)
+        val items = if (fromStart) page.items else old.items + page.items
+        val ordered = if (query.playlistId != null) items else dev.wearjelly.data.PinyinSort.sort(items.distinctBy { it.id })
+        updateLibrary(query) {
+            copy(
+                items = ordered,
+                total = page.totalRecordCount,
+                nextOffset = ordered.size,
+                loading = false,
+                loaded = true,
+                endReached = ordered.size >= page.totalRecordCount,
+                error = null,
+            )
+        }
+    }
+
+    private fun isNetworkFailure(error: Throwable): Boolean = when (error) {
+        is java.net.ConnectException,
+        is java.net.UnknownHostException,
+        is java.net.SocketTimeoutException,
+        is java.net.NoRouteToHostException,
+        is IOException -> true
+        else -> false
     }
 
     private fun updateLibrary(query: LibraryQuery, change: LibraryUi.() -> LibraryUi) {
