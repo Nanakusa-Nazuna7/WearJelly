@@ -81,6 +81,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -208,12 +209,11 @@ fun WearJellyApp(viewModel: AppViewModel) {
                         is AppScreen.LyricsSettings -> LyricsSettingsScreen(viewModel)
                         is AppScreen.Downloads -> DownloadsScreen(viewModel)
                         is AppScreen.History -> HistoryScreen(viewModel)
-                        is AppScreen.ScopeActions -> ScopeActionsScreen(viewModel, screen)
                         is AppScreen.BatchActions -> BatchActionsScreen(viewModel, screen)
                         is AppScreen.ListActions -> ListActionsScreen(viewModel, screen)
                         is AppScreen.SongInfo -> SongInfoScreen(screen.item)
                         is AppScreen.Settings -> SettingsScreen(viewModel, uiState.account)
-                        is AppScreen.Confirm -> ConfirmScreen(viewModel, screen.action, screen.query)
+                        is AppScreen.Confirm -> ConfirmScreen(viewModel, screen.action, screen.query, screen.menu)
                             }
                             }
                         }
@@ -435,88 +435,59 @@ internal fun HomeScreen(viewModel: AppViewModel, account: AccountUi?) {
             }
         }
 
+        // 主页 6 个列表入口（t2：长按打开列表级菜单，单击仍进列表；设置非列表不参与）
         item {
-            Button(
+            HomeListButton(
+                icon = Icons.Default.Person,
+                label = "艺人",
                 onClick = { viewModel.openLibrary(LibraryKind.ARTISTS) },
-                modifier = Modifier.fillMaxWidth().height(42.dp),
-                colors = ButtonDefaults.secondaryButtonColors()
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Person, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("艺人")
-                }
-            }
+                onLongClick = { viewModel.openListMenu(ListMenu.RootArtists, "艺人") },
+            )
         }
 
         item {
-            Button(
+            HomeListButton(
+                icon = Icons.Default.Album,
+                label = "专辑",
                 onClick = { viewModel.openLibrary(LibraryKind.ALBUMS) },
-                modifier = Modifier.fillMaxWidth().height(42.dp),
-                colors = ButtonDefaults.secondaryButtonColors()
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Album, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("专辑")
-                }
-            }
+                onLongClick = { viewModel.openListMenu(ListMenu.RootAlbums, "专辑") },
+            )
         }
 
         item {
-            Button(
+            HomeListButton(
+                icon = Icons.Default.MusicNote,
+                label = "所有歌曲",
                 onClick = { viewModel.openLibrary(LibraryKind.SONGS) },
-                modifier = Modifier.fillMaxWidth().height(42.dp),
-                colors = ButtonDefaults.secondaryButtonColors()
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.MusicNote, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("所有歌曲")
-                }
-            }
+                onLongClick = { viewModel.openListMenu(ListMenu.RootSongs, "所有歌曲") },
+            )
         }
 
         item {
-            Button(
+            HomeListButton(
+                icon = Icons.AutoMirrored.Filled.QueueMusic,
+                label = "播放列表",
                 onClick = { viewModel.openLibrary(LibraryKind.PLAYLISTS) },
-                modifier = Modifier.fillMaxWidth().height(42.dp),
-                colors = ButtonDefaults.secondaryButtonColors()
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("播放列表", maxLines = 1)
-                }
-            }
+                onLongClick = { viewModel.openListMenu(ListMenu.RootPlaylists, "播放列表") },
+            )
         }
 
         item {
-            Button(
+            HomeListButton(
+                icon = Icons.AutoMirrored.Filled.QueueMusic,
+                label = "已缓存音乐",
                 onClick = { viewModel.navigate(AppScreen.Downloads) },
-                modifier = Modifier.fillMaxWidth().height(42.dp),
-                colors = ButtonDefaults.secondaryButtonColors()
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("已缓存音乐", maxLines = 1)
-                }
-            }
+                onLongClick = { viewModel.openListMenu(ListMenu.RootDownloads, "已缓存音乐") },
+            )
         }
 
         item {
-            Button(
+            HomeListButton(
+                icon = Icons.Default.Refresh,
+                label = "播放历史",
                 onClick = { viewModel.navigate(AppScreen.History) },
-                modifier = Modifier.fillMaxWidth().height(42.dp),
-                colors = ButtonDefaults.secondaryButtonColors()
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Refresh, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("播放历史", maxLines = 1)
-                }
-            }
+                onLongClick = { viewModel.openListMenu(ListMenu.RootHistory, "播放历史") },
+            )
         }
 
         item {
@@ -531,6 +502,38 @@ internal fun HomeScreen(viewModel: AppViewModel, account: AccountUi?) {
                     Text("设置")
                 }
             }
+        }
+    }
+}
+
+/**
+ * 主页列表入口按钮（t2）：单击进入列表，长按打开该列表类型的列表级长按菜单。
+ * 复刻 wear [Button] 内部 RoundButton 视觉（CircleShape + secondaryButtonColors +
+ * typography.button），在其上叠加 [combinedClickable] 长按，保证入口样式不变。
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun HomeListButton(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
+    val colors = ButtonDefaults.secondaryButtonColors()
+    val contentColor = colors.contentColor(enabled = true).value
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(42.dp)
+            .clip(CircleShape)
+            .background(colors.backgroundColor(enabled = true).value)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, contentDescription = null, tint = contentColor)
+            Spacer(Modifier.width(8.dp))
+            Text(label, style = MaterialTheme.typography.button, color = contentColor, maxLines = 1)
         }
     }
 }
@@ -682,7 +685,9 @@ internal fun LibraryScreen(viewModel: AppViewModel, screen: AppScreen.Library) {
     val downloadingIds by viewModel.downloadingIds.collectAsState()
     val downloadProgress by viewModel.downloadProgress.collectAsState()
     val isSongsScreen = screen.query.kind == LibraryKind.SONGS
-    val headerItems = 1 + (if (isSongsScreen) 1 else 0)
+    val isSelectable = isSongsScreen || screen.query.kind == LibraryKind.ARTISTS
+    // t2：详情页顶部"更多"已移除（能力迁移到上一级长按菜单），头项仅剩标题
+    val headerItems = 1
     rememberSongListAnchor(listState, lib.items, headerItems)
 
     AlphabetListScaffold(
@@ -690,11 +695,15 @@ internal fun LibraryScreen(viewModel: AppViewModel, screen: AppScreen.Library) {
         listState = listState,
         headerItems = headerItems,
         overlay = {
-            if (selectionMode && isSongsScreen) {
+            if (selectionMode && isSelectable) {
                 MultiSelectBar(
                     selectedCount = selectedIds.size,
                     onExit = { viewModel.exitSelectionMode() },
-                    onMore = { viewModel.navigate(AppScreen.BatchActions(screen.query, screen.title)) }
+                    onMore = {
+                        viewModel.navigate(
+                            AppScreen.BatchActions(screen.query, screen.title, if (screen.query.kind == LibraryKind.ARTISTS) BatchSource.ARTISTS else BatchSource.LIBRARY)
+                        )
+                    }
                 )
             }
         }
@@ -718,19 +727,6 @@ internal fun LibraryScreen(viewModel: AppViewModel, screen: AppScreen.Library) {
                 )
             }
 
-            if (isSongsScreen) {
-                item {
-                    Button(
-                        onClick = { viewModel.navigate(AppScreen.ListActions(screen.query, screen.title)) },
-                        modifier = Modifier.fillMaxWidth(0.9f).height(34.dp),
-                        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF22304A))
-                    ) {
-                        Text(Copy.MORE, fontSize = 12.sp, color = Color.White, maxLines = 1)
-                    }
-                }
-            }
-
-
             if (lib.loading && lib.items.isEmpty()) {
                 item {
                     CircularProgressIndicator(modifier = Modifier.padding(16.dp))
@@ -750,8 +746,8 @@ internal fun LibraryScreen(viewModel: AppViewModel, screen: AppScreen.Library) {
                     LibraryItemRow(
                         item = item,
                         query = screen.query,
-                        selected = item.id in selectedIds,
-                        selectionMode = selectionMode && isSongsScreen,
+                         selected = item.id in selectedIds,
+                         selectionMode = selectionMode && isSelectable,
                         isCurrent = pbState.current?.id == item.id,
                         isPlaying = pbState.isPlaying,
                         cached = item.id in cachedIds,
@@ -760,20 +756,37 @@ internal fun LibraryScreen(viewModel: AppViewModel, screen: AppScreen.Library) {
                         onClick = {
                             android.util.Log.d("WJ", "row tap ${item.name} kind=${screen.query.kind} sel=$selectionMode")
                             when {
-                                selectionMode && isSongsScreen -> viewModel.toggleSongSelection(item.id)
+                                selectionMode && isSelectable -> viewModel.toggleSongSelection(item.id)
                                 screen.query.kind == LibraryKind.SONGS ||
                                     screen.query.kind == LibraryKind.DOWNLOADS -> viewModel.playTrack(item)
                                 else -> viewModel.openItem(screen.query, item)
                             }
                         },
                         onLongClick = {
-                            if (!selectionMode || !isSongsScreen) {
+                            if (!selectionMode || !isSelectable) {
                                 android.util.Log.d("WJ", "row long ${item.name} kind=${screen.query.kind}")
+                                // 歌曲行=单曲菜单（保留）；实体行=该实体歌曲的列表级菜单（作用域=行条目）
                                 when (screen.query.kind) {
                                     LibraryKind.SONGS, LibraryKind.DOWNLOADS ->
                                         viewModel.openTrack(item, screen.query)
-                                    LibraryKind.ARTISTS, LibraryKind.ALBUMS ->
-                                        viewModel.openScopeActions(screen.query, item.name)
+                                    LibraryKind.ARTISTS -> viewModel.openListMenu(
+                                        ListMenu.Entity(
+                                            screen.query.copy(kind = LibraryKind.SONGS, artistId = item.id)
+                                        ),
+                                        item.name,
+                                    )
+                                    LibraryKind.ALBUMS -> viewModel.openListMenu(
+                                        ListMenu.Entity(
+                                            screen.query.copy(kind = LibraryKind.SONGS, parentId = item.id)
+                                        ),
+                                        item.name,
+                                    )
+                                    LibraryKind.PLAYLISTS -> viewModel.openListMenu(
+                                        ListMenu.Entity(
+                                            screen.query.copy(kind = LibraryKind.SONGS, playlistId = item.id)
+                                        ),
+                                        item.name,
+                                    )
                                     else -> Unit
                                 }
                             }
@@ -781,7 +794,7 @@ internal fun LibraryScreen(viewModel: AppViewModel, screen: AppScreen.Library) {
                         },
                         onSwipeLeft = {
                             android.util.Log.d("WJ", "row swipe ${item.name} sel=$selectionMode")
-                            if (selectionMode && isSongsScreen) {
+                            if (selectionMode && isSelectable) {
                                 // MT-002：范围选择
                                 viewModel.selectRangeFromSwipe(item.id, lib.items.map { it.id })
                             } else if (isSongsScreen) {
@@ -795,7 +808,7 @@ internal fun LibraryScreen(viewModel: AppViewModel, screen: AppScreen.Library) {
                     }
                 }
 
-                if (selectionMode && isSongsScreen) {
+                if (selectionMode && isSelectable) {
                     // 底部固定操作栏的避让空间
                     item { Spacer(Modifier.height(56.dp)) }
                 }
@@ -959,7 +972,7 @@ private fun AlphabetListScaffold(
                 val ringSpanF by animateFloatAsState(if (scrubbing) 3f else 1f)
                 val ringSpan = ringSpanF.toInt()
                 if (shownLetterIdx >= 0) {
-                    val stepDeg = if (scrubbing) 8f else 11f
+                    val stepDeg = if (scrubbing) 10f else 14f
                     for (role in -3..3) {
                         if (abs(role) > ringSpan.toInt()) continue
                         val letterIdx = shownLetterIdx + role
@@ -1386,6 +1399,7 @@ internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.Batch
         BatchSource.DOWNLOADS -> dev.wearjelly.data.PinyinSort.downloadedBatchItems(downloaded.map { it.item })
         BatchSource.HISTORY -> history.map { it.item }
         BatchSource.QUEUE -> playbackState.queue.map { it.item }
+        BatchSource.ARTISTS -> uiState.libraries[screen.query]?.items.orEmpty()
     }
     val selectedItems = items.filter { it.id in uiState.selectedSongIds }
     val context = LocalContext.current
@@ -1415,53 +1429,57 @@ internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.Batch
                 color = Color.Gray
             )
         }
-        item {
-            Button(
-                onClick = {
-                    viewModel.batchSelectedSongsToQueue(items)
-                    viewModel.goBack()
-                },
-                modifier = Modifier.fillMaxWidth().height(40.dp),
-                colors = ButtonDefaults.primaryButtonColors()
-            ) {
-                Text(Copy.ADD_TO_QUEUE, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (screen.source != BatchSource.ARTISTS) {
+            item {
+                Button(
+                    onClick = {
+                        viewModel.batchSelectedSongsToQueue(items)
+                        viewModel.goBack()
+                    },
+                    modifier = Modifier.fillMaxWidth().height(40.dp),
+                    colors = ButtonDefaults.primaryButtonColors()
+                ) {
+                    Text(Copy.ADD_TO_QUEUE, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
         }
-        item {
-            Button(
-                onClick = {
-                    viewModel.batchSelectedSongsToCache(items)
-                    viewModel.goBack()
-                },
-                modifier = Modifier.fillMaxWidth().height(40.dp),
-                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF4A5568))
-            ) {
-                Text(Copy.cacheSelected(uiState.selectedSongIds.size), fontSize = 12.sp, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (screen.source != BatchSource.ARTISTS) {
+            item {
+                Button(
+                    onClick = {
+                        viewModel.batchSelectedSongsToCache(items)
+                        viewModel.goBack()
+                    },
+                    modifier = Modifier.fillMaxWidth().height(40.dp),
+                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF4A5568))
+                ) {
+                    Text(Copy.cacheSelected(uiState.selectedSongIds.size), fontSize = 12.sp, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
-        }
-        item {
-            Button(
-                onClick = {
-                    viewModel.playItemsNext(selectedItems)
-                    viewModel.goBack()
-                },
-                modifier = Modifier.fillMaxWidth().height(40.dp),
-                colors = ButtonDefaults.secondaryButtonColors()
-            ) {
-                Text(Copy.PLAY_NEXT, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            item {
+                Button(
+                    onClick = {
+                        viewModel.playItemsNext(selectedItems)
+                        viewModel.goBack()
+                    },
+                    modifier = Modifier.fillMaxWidth().height(40.dp),
+                    colors = ButtonDefaults.secondaryButtonColors()
+                ) {
+                    Text(Copy.PLAY_NEXT, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
-        }
-        item {
-            Button(
-                onClick = {
-                    viewModel.deleteCachedTracks(uiState.selectedSongIds)
-                    viewModel.exitSelectionMode()
-                    viewModel.goBack()
-                },
-                modifier = Modifier.fillMaxWidth().height(40.dp),
-                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF4A5568))
-            ) {
-                Text(Copy.DELETE_SELECTED_CACHES, fontSize = 12.sp, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            item {
+                Button(
+                    onClick = {
+                        viewModel.deleteCachedTracks(uiState.selectedSongIds)
+                        viewModel.exitSelectionMode()
+                        viewModel.goBack()
+                    },
+                    modifier = Modifier.fillMaxWidth().height(40.dp),
+                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF4A5568))
+                ) {
+                    Text(Copy.DELETE_SELECTED_CACHES, fontSize = 12.sp, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
         }
         if (screen.source == BatchSource.QUEUE) {
@@ -1548,69 +1566,13 @@ internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.Batch
     }
 }
 
-@Composable
-internal fun ScopeActionsScreen(viewModel: AppViewModel, screen: AppScreen.ScopeActions) {
-    val listState = rememberScalingLazyListState()
-
-    ScalingLazyColumn(
-        scalingParams = ListScalingParams,
-        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
-        state = listState,
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        item {
-            Text(
-                text = screen.title,
-                style = MaterialTheme.typography.title3,
-                textAlign = TextAlign.Center,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 12.dp)
-            )
-        }
-        item {
-            Button(
-                onClick = {
-                    viewModel.batchAllSongsToQueue(screen.query)
-                    viewModel.goBack()
-                },
-                modifier = Modifier.fillMaxWidth().height(42.dp),
-                colors = ButtonDefaults.primaryButtonColors()
-            ) {
-                Text(Copy.QUEUE_ALL, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-        }
-        item {
-            Button(
-                onClick = {
-                    viewModel.batchAllSongsToCache(screen.query)
-                    viewModel.goBack()
-                },
-                modifier = Modifier.fillMaxWidth().height(42.dp),
-                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF4A5568))
-            ) {
-                Text(Copy.CACHE_ALL, fontSize = 12.sp, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-        }
-        item {
-            Button(
-                onClick = { viewModel.goBack() },
-                modifier = Modifier.fillMaxWidth().height(38.dp),
-                colors = ButtonDefaults.secondaryButtonColors()
-            ) {
-                Text("取消", fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-        }
-    }
-}
-
-/** 列表级菜单（歌曲列表头部"更多"进入）。规格中的"进入多选"按 D2 决策取消（左滑是唯一入口），排序/筛选延后。 */
+/**
+ * 列表级长按菜单（t2：主页 6 入口与艺人/专辑/播放列表实体条目长按进入；
+ * 原详情页顶部"更多"与 ScopeActions 页合并于此）。
+ * 菜单项集合与顺序由 [ListMenu.items] 按类型决定，动作统一走 [AppViewModel.onListMenuAction]。
+ */
 @Composable
 internal fun ListActionsScreen(viewModel: AppViewModel, screen: AppScreen.ListActions) {
-    val uiState by viewModel.uiState.collectAsState()
-    val lib = uiState.libraries[screen.query] ?: LibraryUi()
-
     ScalingLazyColumn(
         scalingParams = ListScalingParams,
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
@@ -1629,61 +1591,47 @@ internal fun ListActionsScreen(viewModel: AppViewModel, screen: AppScreen.ListAc
                 modifier = Modifier.padding(top = 12.dp)
             )
         }
-        item {
-            Button(
-                onClick = { viewModel.playLoaded(screen.query, null) },
-                enabled = lib.items.isNotEmpty(),
-                modifier = Modifier.fillMaxWidth().height(40.dp),
-                colors = ButtonDefaults.primaryButtonColors()
-            ) {
-                Text(Copy.PLAY_ALL, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        items(screen.menu.items()) { entry ->
+            val (background, textColor) = when (entry.action) {
+                ListMenuAction.PLAY_ALL -> null to null
+                ListMenuAction.CACHE_ALL -> Color(0xFF4A5568) to Color.White
+                ListMenuAction.DELETE_CACHES -> Color(0xFF4A1515) to Color.White
+                else -> null to null
             }
-        }
-        item {
             Button(
-                onClick = { viewModel.playAllShuffled(screen.query) },
-                enabled = lib.items.isNotEmpty(),
+                onClick = { viewModel.onListMenuAction(screen.menu, entry.action) },
                 modifier = Modifier.fillMaxWidth().height(40.dp),
-                colors = ButtonDefaults.secondaryButtonColors()
+                colors = when (entry.action) {
+                    ListMenuAction.PLAY_ALL -> ButtonDefaults.primaryButtonColors()
+                    else -> background?.let {
+                        ButtonDefaults.buttonColors(backgroundColor = it)
+                    } ?: ButtonDefaults.secondaryButtonColors()
+                }
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Shuffle, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(Copy.SHUFFLE_PLAY_ALL, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (entry.action == ListMenuAction.SHUFFLE_ALL) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Shuffle, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(entry.label, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                } else {
+                    Text(
+                        entry.label,
+                        fontSize = 12.sp,
+                        color = textColor ?: Color.Unspecified,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             }
         }
         item {
             Button(
-                onClick = {
-                    viewModel.batchAllSongsToQueue(screen.query)
-                    viewModel.goBack()
-                },
-                modifier = Modifier.fillMaxWidth().height(40.dp),
+                onClick = { viewModel.goBack() },
+                modifier = Modifier.fillMaxWidth().height(38.dp),
                 colors = ButtonDefaults.secondaryButtonColors()
             ) {
-                Text(Copy.QUEUE_ALL, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-        }
-        item {
-            Button(
-                onClick = {
-                    viewModel.batchAllSongsToCache(screen.query)
-                    viewModel.goBack()
-                },
-                modifier = Modifier.fillMaxWidth().height(40.dp),
-                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF4A5568))
-            ) {
-                Text(Copy.CACHE_ALL, fontSize = 12.sp, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-        }
-        item {
-            Button(
-                onClick = { viewModel.requestConfirmation(ConfirmAction.DELETE_LIST_CACHES, screen.query) },
-                modifier = Modifier.fillMaxWidth().height(40.dp),
-                colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF4A1515))
-            ) {
-                Text(Copy.DELETE_ALL_CACHES, fontSize = 12.sp, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("取消", fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }
@@ -1802,7 +1750,7 @@ internal fun TrackDetailScreen(viewModel: AppViewModel, item: JellyfinItem, sour
 
         item {
             Button(
-                onClick = { viewModel.playItemsNext(listOf(item)) },
+                onClick = { viewModel.playItemsNext(listOf(item)); viewModel.goBack() },
                 modifier = Modifier.fillMaxWidth().height(42.dp),
                 colors = ButtonDefaults.secondaryButtonColors()
             ) {
@@ -1812,7 +1760,7 @@ internal fun TrackDetailScreen(viewModel: AppViewModel, item: JellyfinItem, sour
 
         item {
             Button(
-                onClick = { viewModel.enqueue(item) },
+                onClick = { viewModel.enqueue(item); viewModel.goBack() },
                 modifier = Modifier.fillMaxWidth().height(42.dp),
                 colors = ButtonDefaults.secondaryButtonColors()
             ) {
@@ -1838,7 +1786,7 @@ internal fun TrackDetailScreen(viewModel: AppViewModel, item: JellyfinItem, sour
 
         item {
             Button(
-                onClick = { viewModel.downloadTrack(item) },
+                onClick = { viewModel.downloadTrack(item); viewModel.goBack() },
                 enabled = !isDownloading && !isDownloaded,
                 modifier = Modifier.fillMaxWidth().height(42.dp),
                 colors = ButtonDefaults.secondaryButtonColors()
@@ -1905,7 +1853,7 @@ internal fun TrackDetailScreen(viewModel: AppViewModel, item: JellyfinItem, sour
 
         item {
             Button(
-                onClick = { shareItems(context, uiState.account?.serverUrl, listOf(item)) },
+                onClick = { shareItems(context, uiState.account?.serverUrl, listOf(item)); viewModel.goBack() },
                 modifier = Modifier.fillMaxWidth().height(42.dp),
                 colors = ButtonDefaults.secondaryButtonColors()
             ) {
@@ -2647,7 +2595,12 @@ internal fun formatBytes(bytes: Long): String {
 }
 
 @Composable
-internal fun ConfirmScreen(viewModel: AppViewModel, action: ConfirmAction, query: LibraryQuery? = null) {
+internal fun ConfirmScreen(
+    viewModel: AppViewModel,
+    action: ConfirmAction,
+    query: LibraryQuery? = null,
+    menu: ListMenu? = null,
+) {
     val title = when (action) {
         ConfirmAction.CLEAR_QUEUE -> "确定清空播放队列？"
         ConfirmAction.SWITCH_SERVER -> "确定切换服务器？\n将清除当前登录"
@@ -2677,7 +2630,7 @@ internal fun ConfirmScreen(viewModel: AppViewModel, action: ConfirmAction, query
                 Text("否")
             }
             Button(
-                onClick = { viewModel.confirm(action, query) },
+                onClick = { viewModel.confirm(action, query, menu) },
                 modifier = Modifier.size(44.dp),
                 colors = ButtonDefaults.primaryButtonColors()
             ) {

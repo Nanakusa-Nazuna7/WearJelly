@@ -32,7 +32,7 @@ internal data class LibraryQuery(
     val playlistId: String? = null,
 )
 
-internal enum class BatchSource { LIBRARY, DOWNLOADS, HISTORY, QUEUE }
+internal enum class BatchSource { LIBRARY, DOWNLOADS, HISTORY, QUEUE, ARTISTS }
 
 internal sealed interface AppScreen {
     data object Login : AppScreen
@@ -45,16 +45,20 @@ internal sealed interface AppScreen {
     data object LyricsSettings : AppScreen
     data object Downloads : AppScreen
     data object History : AppScreen
-    data class ScopeActions(val query: LibraryQuery, val title: String) : AppScreen
     data class BatchActions(
         val query: LibraryQuery,
         val title: String,
         val source: BatchSource = BatchSource.LIBRARY,
     ) : AppScreen
-    data class ListActions(val query: LibraryQuery, val title: String) : AppScreen
+    /** 列表级长按菜单（原详情页顶部"更多"迁移至此，按 [ListMenu] 类型给菜单项）。 */
+    data class ListActions(val menu: ListMenu, val title: String) : AppScreen
     data class SongInfo(val item: JellyfinItem) : AppScreen
     data object Settings : AppScreen
-    data class Confirm(val action: ConfirmAction, val query: LibraryQuery? = null) : AppScreen
+    data class Confirm(
+        val action: ConfirmAction,
+        val query: LibraryQuery? = null,
+        val menu: ListMenu? = null,
+    ) : AppScreen
 }
 
 internal enum class ConfirmAction { CLEAR_QUEUE, SWITCH_SERVER, LOGOUT, DELETE_LIST_CACHES }
@@ -266,8 +270,9 @@ class AppViewModel(
         }
     }
 
-    internal fun openScopeActions(query: LibraryQuery, title: String) {
-        navigate(AppScreen.ScopeActions(query, title))
+    /** 打开列表级长按菜单（主页 6 入口与实体条目统一入口）。 */
+    internal fun openListMenu(menu: ListMenu, title: String) {
+        navigate(AppScreen.ListActions(menu, title))
     }
 
     internal fun openTrack(item: JellyfinItem, source: LibraryQuery) {
@@ -345,9 +350,14 @@ class AppViewModel(
                         PAGE_SIZE
                     )
                     val items = if (fromStart) page.items else old.items + page.items
+                    val ordered = if (query.playlistId != null) {
+                        items
+                    } else {
+                        dev.wearjelly.data.PinyinSort.sort(items.distinctBy { it.id })
+                    }
                     updateLibrary(query) {
-                        copy(items = items, total = page.totalRecordCount, nextOffset = items.size,
-                            loading = false, loaded = true, endReached = items.size >= page.totalRecordCount,
+                        copy(items = ordered, total = page.totalRecordCount, nextOffset = ordered.size,
+                            loading = false, loaded = true, endReached = ordered.size >= page.totalRecordCount,
                             error = null)
                     }
                     return@launch
@@ -376,12 +386,7 @@ class AppViewModel(
                     offset += page.items.size
                     if (page.items.isEmpty()) break
                 }
-                // 播放列表必须保持服务器给出的列表顺序，不能按拼音重排
-                val ordered = if (query.playlistId != null) {
-                    all
-                } else {
-                    dev.wearjelly.data.PinyinSort.sort(all.distinctBy { it.id })
-                }
+                val ordered = dev.wearjelly.data.PinyinSort.sort(all.distinctBy { it.id })
                 updateLibrary(query) {
                     copy(
                         items = ordered,
@@ -595,43 +600,132 @@ class AppViewModel(
         exitSelectionMode()
     }
 
-    /** 随机播放全部：确保随机模式开启后从列表内随机一首开始播放。 */
-    internal fun playAllShuffled(query: LibraryQuery) {
-        if (!playback.state.value.shuffleEnabled) {
-            playbackAction { playback.toggleShuffle() }
+    /**
+     * 列表级长按菜单动作统一分发（D1-D3 决策迁移原详情页顶部"更多"能力）。
+     * 全部按完整列表语义解析（离线走快照），解析失败仅提示不崩溃。
+     */
+    internal fun onListMenuAction(menu: ListMenu, action: ListMenuAction) {
+        when (action) {
+            ListMenuAction.PLAY_ALL -> playFromListMenu(menu, shuffled = false)
+            ListMenuAction.SHUFFLE_ALL -> playFromListMenu(menu, shuffled = true)
+            ListMenuAction.QUEUE_ALL -> queueListMenu(menu)
+            ListMenuAction.CACHE_ALL -> cacheListMenu(menu)
+            ListMenuAction.DELETE_CACHES ->
+                requestConfirmation(ConfirmAction.DELETE_LIST_CACHES, menu = menu)
         }
-        playLoaded(query, randomizedStart = true)
     }
 
-    internal fun batchAllSongsToQueue(query: LibraryQuery) {
+    /** 解析菜单对应歌曲列表；null 表示已失败（错误 notice 已提示）或缺少作用域，调用方直接终止。 */
+    private suspend fun resolveListMenuItems(menu: ListMenu): List<JellyfinItem>? = try {
+        when (menu.source()) {
+            ListMenuSource.HISTORY -> history.value.map { it.item }
+            ListMenuSource.DOWNLOADS ->
+                dev.wearjelly.data.PinyinSort.sort(downloadedSongs.value.map { it.item })
+            ListMenuSource.PLAYLIST_UNION -> loadAllSongsOfAllPlaylists()
+            ListMenuSource.SONGS_LIBRARY -> menu.scopeQuery()?.let { query -> loadAllSongs(query) }
+        }
+    } catch (error: kotlinx.coroutines.CancellationException) {
+        throw error
+    } catch (error: Exception) {
+        showNotice(userMessage(error))
+        null
+    }
+
+    private fun playFromListMenu(menu: ListMenu, shuffled: Boolean) {
         viewModelScope.launch {
-            val songs = loadAllSongs(query)
-            if (songs.isEmpty()) {
+            val items = resolveListMenuItems(menu) ?: return@launch
+            if (items.isEmpty()) {
                 showNotice("没有找到歌曲")
                 return@launch
             }
-            playback.enqueueMany(songs).fold(
-                onSuccess = { showNotice("已加入 ${songs.size} 首歌曲") },
+            if (repository.session.value == null && !offlineMode) return@launch
+            if (shuffled && !playback.state.value.shuffleEnabled) {
+                playbackAction { playback.toggleShuffle() }
+            }
+            if (!waitForConnected()) {
+                showNotice("播放器连接失败，请重试")
+                return@launch
+            }
+            val index = if (shuffled) kotlin.random.Random.nextInt(items.size) else 0
+            try {
+                playback.play(items, index)
+                navigate(AppScreen.Player)
+            } catch (error: Exception) {
+                showNotice(userMessage(error))
+            }
+        }
+    }
+
+    private fun queueListMenu(menu: ListMenu) {
+        viewModelScope.launch {
+            val items = resolveListMenuItems(menu) ?: return@launch
+            if (items.isEmpty()) {
+                showNotice("没有找到歌曲")
+                return@launch
+            }
+            playback.enqueueMany(items).fold(
+                onSuccess = {
+                    goBack()
+                    showNotice("已加入 ${items.size} 首歌曲")
+                },
                 onFailure = { showNotice(it.localizedMessage ?: "批量加入队列失败") },
             )
         }
     }
 
-    internal fun batchAllSongsToCache(query: LibraryQuery) {
+    private fun cacheListMenu(menu: ListMenu) {
         viewModelScope.launch {
-            val songs = loadAllSongs(query)
-            if (songs.isEmpty()) {
+            val items = resolveListMenuItems(menu) ?: return@launch
+            if (items.isEmpty()) {
                 showNotice("没有找到歌曲")
                 return@launch
             }
-            downloadManager.enqueue(songs)
-            showNotice("已加入缓存队列 ${songs.size} 首")
+            downloadManager.enqueue(items)
+            goBack()
+            showNotice("已加入缓存队列 ${items.size} 首")
         }
+    }
+
+    private suspend fun loadAllSongsOfAllPlaylists(): List<JellyfinItem> {
+        val result = mutableListOf<JellyfinItem>()
+        var offset = 0
+        while (true) {
+            val page = if (offlineMode) {
+                offlineReader.page(LibraryKind.PLAYLISTS, null, null, null, offset, PAGE_SIZE)
+            } else {
+                repository.getItems(kind = LibraryKind.PLAYLISTS, startIndex = offset, limit = PAGE_SIZE)
+            }
+            for (playlist in page.items) {
+                result += loadAllSongs(LibraryQuery(LibraryKind.SONGS, playlistId = playlist.id))
+            }
+            offset += page.items.size
+            if (page.items.isEmpty() || offset >= page.totalRecordCount) break
+        }
+        return result.distinctBy { it.id }
     }
 
     private suspend fun loadAllSongs(query: LibraryQuery): List<JellyfinItem> {
         if (query.kind == LibraryKind.SONGS && mutableUi.value.libraries[query]?.endReached == true) {
             return mutableUi.value.libraries[query]?.items.orEmpty()
+        }
+        if (offlineMode) {
+            val result = mutableListOf<JellyfinItem>()
+            var offset = 0
+            while (true) {
+                val page = offlineReader.page(
+                    query.kind,
+                    query.playlistId,
+                    query.parentId,
+                    query.artistId,
+                    offset,
+                    PAGE_SIZE,
+                )
+                if (page.items.isEmpty()) break
+                result += page.items
+                offset += page.items.size
+                if (offset >= page.totalRecordCount) break
+            }
+            return if (query.playlistId != null) result else result.distinctBy { it.id }
         }
         val result = mutableListOf<JellyfinItem>()
         var offset = 0
@@ -830,11 +924,14 @@ class AppViewModel(
         lyricsPrefs.setFontSize(size)
     }
 
-    internal fun requestConfirmation(action: ConfirmAction, query: LibraryQuery? = null) =
-        navigate(AppScreen.Confirm(action, query))
+    internal fun requestConfirmation(
+        action: ConfirmAction,
+        query: LibraryQuery? = null,
+        menu: ListMenu? = null,
+    ) = navigate(AppScreen.Confirm(action, query, menu))
 
-    internal fun confirm(action: ConfirmAction, query: LibraryQuery? = null) {
-        if (mutableUi.value.screen != AppScreen.Confirm(action, query)) return
+    internal fun confirm(action: ConfirmAction, query: LibraryQuery? = null, menu: ListMenu? = null) {
+        if (mutableUi.value.screen != AppScreen.Confirm(action, query, menu)) return
         when (action) {
             ConfirmAction.CLEAR_QUEUE -> {
                 goBack()
@@ -842,8 +939,16 @@ class AppViewModel(
             }
             ConfirmAction.DELETE_LIST_CACHES -> {
                 goBack()
-                val ids = mutableUi.value.libraries[query]?.items?.map { it.id }.orEmpty()
-                deleteCachedTracks(ids)
+                if (menu != null) {
+                    // 菜单语义：删除该菜单完整列表的缓存（D3，全量解析，含离线快照）
+                    viewModelScope.launch {
+                        val items = resolveListMenuItems(menu) ?: return@launch
+                        deleteCachedTracks(items.map { it.id })
+                    }
+                } else {
+                    val ids = mutableUi.value.libraries[query]?.items?.map { it.id }.orEmpty()
+                    deleteCachedTracks(ids)
+                }
             }
             ConfirmAction.SWITCH_SERVER, ConfirmAction.LOGOUT -> {
                 val account = mutableUi.value.account ?: return
