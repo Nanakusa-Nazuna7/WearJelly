@@ -129,13 +129,13 @@ internal fun SeekableProgressBar(
                  if (indeterminate) {
                      LinearProgressIndicator(
                          progress = { 0f },
-                         modifier = Modifier.fillMaxWidth().height(3.dp),
+                         modifier = Modifier.fillMaxWidth().height(2.dp),
                          colors = ProgressIndicatorDefaults.colors()
                      )
                  } else {
                      LinearProgressIndicator(
                          progress = { bufferedFraction },
-                         modifier = Modifier.fillMaxWidth().height(3.dp),
+                         modifier = Modifier.fillMaxWidth().height(2.dp),
                          colors = ProgressIndicatorDefaults.colors(
                              indicatorColor = MaterialTheme.colorScheme.onSurfaceVariant,
                              trackColor = MaterialTheme.colorScheme.surfaceContainer
@@ -143,7 +143,7 @@ internal fun SeekableProgressBar(
                      )
                      LinearProgressIndicator(
                          progress = { animatedPlayedFraction },
-                         modifier = Modifier.fillMaxWidth().height(3.dp),
+                         modifier = Modifier.fillMaxWidth().height(2.dp),
                          colors = ProgressIndicatorDefaults.colors(
                              indicatorColor = MaterialTheme.colorScheme.primary,
                              trackColor = MaterialTheme.colorScheme.surfaceContainer
@@ -212,7 +212,7 @@ internal fun SeekableProgressBar(
 
         Spacer(Modifier.height(2.dp))
         Row(
-            modifier = Modifier.fillMaxWidth().height(3.dp),
+            modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(text = formatTime(displayMs), style = MaterialTheme.typography.bodyExtraSmall, color = MaterialTheme.colorScheme.outline)
