@@ -259,9 +259,13 @@ class AppViewModel(
         downloadManagementJob?.cancel()
         downloadManagementJob = viewModelScope.launch {
             _downloadManagementItems.value = if (offlineMode) {
-                offlineReader.page(LibraryKind.SONGS, null, null, null, 0, Int.MAX_VALUE).items
+                val cachedIds = downloadManager.cachedTrackIds.value
+                dev.wearjelly.data.PinyinSort.sort(
+                    offlineReader.page(LibraryKind.SONGS, null, null, null, 0, Int.MAX_VALUE).items
+                        .filter { it.id in cachedIds }
+                )
             } else {
-                downloadedSongs.value.map { it.item }
+                dev.wearjelly.data.PinyinSort.sort(downloadedSongs.value.map { it.item })
             }
         }
     }

@@ -958,6 +958,7 @@ internal fun LibraryScreen(viewModel: AppViewModel, screen: AppScreen.Library) {
                         isCurrent = pbState.current?.id == item.id,
                         isPlaying = pbState.isPlaying,
                         cached = item.id in cachedIds,
+                         offline = viewModel.isOfflineMode,
                         downloadProgressFraction =
                             if (item.id in downloadingIds) downloadProgress[item.id]?.fraction else null,
                         onClick = {
@@ -2584,6 +2585,7 @@ internal fun QueueScreen(viewModel: AppViewModel) {
                         isCurrent = item.id == pbState.current?.id,
                         isPlaying = pbState.isPlaying,
                         cached = item.id in cachedIds,
+                         offline = viewModel.isOfflineMode,
                         trailingAction = { viewModel.removeQueueItem(index, item.id) },
                         onClick = {
                             if (selectionMode) viewModel.toggleSongSelection(item.id)
@@ -2649,16 +2651,26 @@ internal fun DownloadsScreen(viewModel: AppViewModel) {
     val downloadingIds by viewModel.downloadingIds.collectAsState()
     val downloadProgress by viewModel.downloadProgress.collectAsState()
     val offline = viewModel.isOfflineMode
+    val cachedOnlyItems = remember(items, cachedIds) {
+        items.filter { it.id in cachedIds }
+            .let(dev.wearjelly.data.PinyinSort::sort)
+    }
     var sectionExpanded by remember { mutableStateOf(true) }
 
     val headerItems = 1 + (if (queue.isNotEmpty()) 1 else 0) +
         (if (queue.isNotEmpty() && sectionExpanded) queue.size else 0)
-    rememberSongListAnchor(listState, items, headerItems)
+    rememberSongListAnchor(listState, cachedOnlyItems, headerItems)
 
     ScreenScaffold(scrollState = listState) { contentPadding ->
+    AlphabetListScaffold(
+        items = cachedOnlyItems,
+        listState = listState,
+        headerItems = headerItems,
+        overlay = null
+    ) { scaleModifier ->
     TransformingLazyColumn(
         contentPadding = contentPadding,
-        modifier = Modifier.fillMaxSize().padding(start = 14.dp, end = LIST_END_PADDING_DP.dp),
+        modifier = scaleModifier.fillMaxSize().padding(start = 14.dp, end = LIST_END_PADDING_DP.dp),
         state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -2711,10 +2723,10 @@ internal fun DownloadsScreen(viewModel: AppViewModel) {
                 }
             }
         }
-        if (items.isEmpty()) {
+        if (cachedOnlyItems.isEmpty()) {
             item {
                 Text(
-                    if (offline) "暂无歌曲元数据" else "暂无下载记录",
+                    if (offline) "暂无已缓存歌曲" else "暂无下载记录",
                     color = MaterialTheme.colorScheme.outline,
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier
@@ -2723,20 +2735,21 @@ internal fun DownloadsScreen(viewModel: AppViewModel) {
                 )
             }
         } else {
-            itemsIndexed(items) { _, item ->
+            itemsIndexed(cachedOnlyItems) { _, item ->
                 LibraryItemRow(item = item, query = LibraryQuery(LibraryKind.DOWNLOADS),
                     modifier = Modifier.minimumVerticalContentPadding(TextDefaults.minimumTopListContentPadding, TextDefaults.minimumBottomListContentPadding)
                         .transformedHeight(this, transformationSpec),
                     selected = item.id in selectedIds, selectionMode = selectionMode,
                     isCurrent = pbState.current?.id == item.id, isPlaying = pbState.isPlaying,
-                    cached = item.id in cachedIds, offline = offline,
+                    cached = item.id in cachedIds,
+                         offline = offline,
                     downloadProgressFraction = if (item.id in downloadingIds) downloadProgress[item.id]?.fraction else null,
                     onClick = { if (selectionMode) viewModel.toggleSongSelection(item.id) else viewModel.playTrack(item) },
                     onLongClick = { if (!selectionMode) viewModel.openTrack(item, LibraryQuery(LibraryKind.DOWNLOADS)) },
-                    onSwipeLeft = { if (selectionMode) viewModel.selectRangeFromSwipe(item.id, items.map { it.id }) else viewModel.beginSelectionFromSwipe(item.id) })
+                    onSwipeLeft = { if (selectionMode) viewModel.selectRangeFromSwipe(item.id, cachedOnlyItems.map { it.id }) else viewModel.beginSelectionFromSwipe(item.id) })
             }
         }
-        if (selectionMode && items.isNotEmpty()) {
+        if (selectionMode && cachedOnlyItems.isNotEmpty()) {
             item {
                 Spacer(
                     Modifier
@@ -2746,6 +2759,7 @@ internal fun DownloadsScreen(viewModel: AppViewModel) {
                 )
             }
         }
+    }
     }
     }
 }
@@ -2829,6 +2843,7 @@ internal fun HistoryScreen(viewModel: AppViewModel) {
                     isCurrent = pbState.current?.id == item.id,
                     isPlaying = pbState.isPlaying,
                     cached = item.id in cachedIds,
+                         offline = viewModel.isOfflineMode,
                     onClick = {
                         if (selectionMode) viewModel.toggleSongSelection(item.id) else viewModel.playTrack(item)
                     },
