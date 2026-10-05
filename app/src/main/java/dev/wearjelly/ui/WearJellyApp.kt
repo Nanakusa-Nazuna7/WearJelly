@@ -872,6 +872,7 @@ internal fun LibraryScreen(viewModel: AppViewModel, screen: AppScreen.Library) {
     val selectionMode = uiState.selectionMode
     val pbState by viewModel.playbackState.collectAsState()
     val cachedIds by viewModel.cachedTrackIds.collectAsState()
+    val offlineCachedEntities by viewModel.offlineCachedEntityIds.collectAsState()
     val downloadingIds by viewModel.downloadingIds.collectAsState()
     val downloadProgress by viewModel.downloadProgress.collectAsState()
     val isSongsScreen = screen.query.kind == LibraryKind.SONGS
@@ -957,7 +958,7 @@ internal fun LibraryScreen(viewModel: AppViewModel, screen: AppScreen.Library) {
                          selectionMode = selectionMode && isSelectable,
                         isCurrent = pbState.current?.id == item.id,
                         isPlaying = pbState.isPlaying,
-                        cached = item.id in cachedIds,
+                        cached = item.id in cachedIds || item.id in offlineCachedEntities,
                          offline = viewModel.isOfflineMode,
                         downloadProgressFraction =
                             if (item.id in downloadingIds) downloadProgress[item.id]?.fraction else null,
@@ -1707,7 +1708,7 @@ internal fun BatchActionsScreen(viewModel: AppViewModel, screen: AppScreen.Batch
                 }
             }
         }
-        if (screen.source != BatchSource.ARTISTS) {
+        if (screen.source != BatchSource.ARTISTS && !viewModel.isOfflineMode) {
             item {
                 Button(
                     onClick = {
@@ -1892,7 +1893,7 @@ internal fun ListActionsScreen(viewModel: AppViewModel, screen: AppScreen.ListAc
                     .transformedHeight(this, transformationSpec)
             )
         }
-        items(screen.menu.items()) { entry ->
+        items(screen.menu.items(offline = viewModel.isOfflineMode)) { entry ->
             val (background, textColor) = when (entry.action) {
                 ListMenuAction.PLAY_ALL -> null to null
                 ListMenuAction.CACHE_ALL -> Color(0xFF4A5568) to MaterialTheme.colorScheme.onBackground
@@ -2119,6 +2120,8 @@ internal fun TrackDetailScreen(viewModel: AppViewModel, item: JellyfinItem, sour
             }
         }
 
+        // 离线模式无法联网下载：剔除"缓存这首歌"
+        if (!viewModel.isOfflineMode) {
         item {
             Button(
                 onClick = { viewModel.downloadTrack(item); viewModel.goBack() },
@@ -2165,6 +2168,7 @@ internal fun TrackDetailScreen(viewModel: AppViewModel, item: JellyfinItem, sour
                     Text(Copy.CACHE_THIS)
                 }
             }
+        }
         }
 
         if (isDownloaded) {

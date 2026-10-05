@@ -136,6 +136,9 @@ class AppViewModel(
     internal val isOfflineMode: Boolean get() = offlineMode
     private var downloadManagementJob: Job? = null
     private var offlineMode = false
+    private val _offlineCachedEntityIds = MutableStateFlow<Set<String>>(emptySet())
+    internal val offlineCachedEntityIds: StateFlow<Set<String>> = _offlineCachedEntityIds.asStateFlow()
+    private var offlineEntityJob: Job? = null
     private val mutableUi = MutableStateFlow(AppUiState())
     internal val uiState = mutableUi.asStateFlow()
 
@@ -151,8 +154,12 @@ class AppViewModel(
         viewModelScope.launch {
             if (repository.session.value == null && offlineReader.hasSnapshot()) {
                 offlineMode = true
+                refreshOfflineCachedEntities()
                 mutableUi.update { it.copy(backStack = listOf(AppScreen.Home), login = it.login.copy(error = null)) }
             }
+        }
+        viewModelScope.launch {
+            downloadManager.cachedTrackIds.collect { refreshOfflineCachedEntities() }
         }
         viewModelScope.launch {
             repository.session.collect { value ->
@@ -172,6 +179,7 @@ class AppViewModel(
         val previous = observedSession
         observedSession = value
         offlineMode = value == null && offlineMode
+        refreshOfflineCachedEntities()
         generation += 1
         loginJob?.cancel()
         libraryJobs.values.forEach(Job::cancel)
@@ -404,6 +412,7 @@ class AppViewModel(
             } catch (error: Exception) {
                 if (requestGeneration == generation && !offlineMode && offlineReader.hasSnapshot() && isNetworkFailure(error)) {
                     offlineMode = true
+                    refreshOfflineCachedEntities()
                     loadOfflineLibrary(query, fromStart, old)
                 } else if (requestGeneration == generation) {
                     updateLibrary(query) { copy(loading = false, error = userMessage(error)) }
@@ -437,6 +446,37 @@ class AppViewModel(
         is java.net.NoRouteToHostException,
         is IOException -> true
         else -> false
+    }
+
+    /**
+     * 离线模式实体可操作性：专辑/艺人/播放列表只要含已缓存歌曲即可正常操作。
+     * 实体 id 与 OfflineLibraryReader 的生成规则一致：专辑=albumId、艺人="name:<name>"、播放列表=条目 id。
+     */
+    internal fun refreshOfflineCachedEntities() {
+        offlineEntityJob?.cancel()
+        offlineEntityJob = viewModelScope.launch {
+            if (!offlineMode) {
+                _offlineCachedEntityIds.value = emptySet()
+                return@launch
+            }
+            val cachedIds = downloadManager.cachedTrackIds.value
+            if (cachedIds.isEmpty()) {
+                _offlineCachedEntityIds.value = emptySet()
+                return@launch
+            }
+            val ids = mutableSetOf<String>()
+            for (song in offlineReader.page(LibraryKind.SONGS, null, null, null, 0, Int.MAX_VALUE).items) {
+                if (song.id !in cachedIds) continue
+                song.albumId?.let { ids.add(it) }
+                song.artists.forEach { ids.add("name:$it") }
+                song.albumArtist?.let { ids.add("name:$it") }
+            }
+            for (playlist in offlineReader.page(LibraryKind.PLAYLISTS, null, null, null, 0, Int.MAX_VALUE).items) {
+                val tracks = offlineReader.page(LibraryKind.SONGS, playlist.id, null, null, 0, Int.MAX_VALUE).items
+                if (tracks.any { it.id in cachedIds }) ids.add(playlist.id)
+            }
+            _offlineCachedEntityIds.value = ids
+        }
     }
 
     private fun updateLibrary(query: LibraryQuery, change: LibraryUi.() -> LibraryUi) {

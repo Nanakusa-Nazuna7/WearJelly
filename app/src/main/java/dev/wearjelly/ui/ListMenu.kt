@@ -97,8 +97,9 @@ internal fun ListMenu.scopeQuery(): LibraryQuery? = when (this) {
  * 菜单项（含顺序）：来源+类型+顺序由 ListMenuTest 回归锁定。
  * 歌曲类菜单（所有歌曲根、艺人/专辑/播放列表根、实体条目）= 原详情页顶部"更多"迁移的五项；
  * 历史/已缓存按 D2 各自裁剪。
+ * [offline]：离线模式剔除需要联网的"缓存全部"（CACHE_ALL）。
  */
-internal fun ListMenu.items(): List<ListMenuItem> = when (this) {
+internal fun ListMenu.items(offline: Boolean = false): List<ListMenuItem> = when (this) {
     ListMenu.RootHistory -> listOf(
         ListMenuItem(ListMenuAction.PLAY_ALL, Copy.PLAY_ALL),
         ListMenuItem(ListMenuAction.SHUFFLE_ALL, Copy.SHUFFLE_PLAY_ALL),
@@ -123,4 +124,4 @@ internal fun ListMenu.items(): List<ListMenuItem> = when (this) {
         ListMenuItem(ListMenuAction.CACHE_ALL, Copy.CACHE_ALL),
         ListMenuItem(ListMenuAction.DELETE_CACHES, Copy.DELETE_ALL_CACHES),
     )
-}
+}.let { entries -> if (offline) entries.filter { it.action != ListMenuAction.CACHE_ALL } else entries }
