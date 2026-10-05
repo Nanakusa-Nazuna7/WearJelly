@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -276,12 +277,12 @@ fun WearJellyApp(viewModel: AppViewModel) {
                             val backToPlayer = initialState is AppScreen.Lyrics && targetState is AppScreen.Player
                             when {
                                 pushToLyrics ->
-                                    (slideInHorizontally { it } + fadeIn(tween(220))) togetherWith
-                                        (slideOutHorizontally { -it / 3 } + fadeOut(tween(220)))
+                                    (slideInHorizontally { it } + fadeIn(tween(340, easing = FastOutSlowInEasing))) togetherWith
+                                        (slideOutHorizontally { -it / 3 } + fadeOut(tween(340, easing = FastOutSlowInEasing)))
                                 backToPlayer ->
-                                    (slideInHorizontally { -it / 3 } + fadeIn(tween(220))) togetherWith
-                                        (slideOutHorizontally { it } + fadeOut(tween(220)))
-                                else -> fadeIn(tween(150)) togetherWith fadeOut(tween(100))
+                                    (slideInHorizontally { -it / 3 } + fadeIn(tween(340, easing = FastOutSlowInEasing))) togetherWith
+                                        (slideOutHorizontally { it } + fadeOut(tween(340, easing = FastOutSlowInEasing)))
+                                else -> fadeIn(tween(340, easing = FastOutSlowInEasing)) togetherWith fadeOut(tween(160, easing = CubicBezierEasing(0.4f, 0f, 0.6f, 1f)))
                             }
                         },
                         label = "screen"
@@ -342,7 +343,7 @@ fun WearJellyApp(viewModel: AppViewModel) {
                             .align(Alignment.BottomCenter)
                             .padding(bottom = 18.dp, start = 24.dp, end = 24.dp)
                             .clip(RoundedCornerShape(10.dp))
-                            .background(Color(0xCC223044))
+                            .background(MaterialTheme.colorScheme.surfaceContainer)
                             .padding(horizontal = 10.dp, vertical = 6.dp)
                     )
                 }

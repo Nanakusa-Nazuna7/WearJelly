@@ -1,11 +1,7 @@
 package dev.wearjelly.ui
 
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -20,7 +16,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.wear.compose.material3.LinearProgressIndicator
 import androidx.wear.compose.material3.MaterialTheme
+import androidx.wear.compose.material3.ProgressIndicatorDefaults
 import androidx.wear.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -116,51 +114,46 @@ internal fun SeekableProgressBar(
         BoxWithConstraints(Modifier.fillMaxWidth().height(40.dp)) {
             val barWidthPx = constraints.maxWidth.toFloat()
             val minDragPx = with(LocalDensity.current) { 24.dp.toPx() }
+             val animatedPlayedFraction by animateFloatAsState(
+                 targetValue = playedFraction,
+                 animationSpec = spring(dampingRatio = 0.9f, stiffness = 500f),
+                 label = "playbackProgress"
+             )
+             Box(
+                 modifier = Modifier
+                     .align(Alignment.Center)
+                     .fillMaxWidth()
+                     .height(40.dp)
+                     .background(MaterialTheme.colorScheme.surfaceContainer),
+                 contentAlignment = Alignment.Center
+             ) {
+                 if (indeterminate) {
+                     LinearProgressIndicator(
+                         progress = { 0f },
+                         modifier = Modifier.fillMaxWidth(),
+                         colors = ProgressIndicatorDefaults.colors()
+                     )
+                 } else {
+                     LinearProgressIndicator(
+                         progress = { bufferedFraction },
+                         modifier = Modifier.fillMaxWidth(),
+                         colors = ProgressIndicatorDefaults.colors(
+                             indicatorColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                             trackColor = Color.Transparent
+                         )
+                     )
+                     LinearProgressIndicator(
+                         progress = { animatedPlayedFraction },
+                         modifier = Modifier.fillMaxWidth(),
+                         colors = ProgressIndicatorDefaults.colors(
+                             indicatorColor = MaterialTheme.colorScheme.primary,
+                             trackColor = Color.Transparent
+                         )
+                     )
+                 }
+             }
 
-            Box(
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .fillMaxWidth()
-                    .height(5.dp)
-                    .clip(RoundedCornerShape(3.dp))
-                    .background(Color.DarkGray)
-            ) {
-                if (indeterminate) {
-                    val transition = rememberInfiniteTransition(label = "seekIndeterminate")
-                    val phase by transition.animateFloat(
-                        initialValue = -0.25f,
-                        targetValue = 1f,
-                        animationSpec = infiniteRepeatable(
-                            animation = tween(1100, easing = LinearEasing),
-                            repeatMode = RepeatMode.Restart
-                        ),
-                        label = "sweep"
-                    )
-                    val density = LocalDensity.current
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth(0.25f)
-                            .offset(x = with(density) { (phase * barWidthPx).toDp() })
-                            .height(5.dp)
-                            .background(MaterialTheme.colorScheme.primary)
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth(bufferedFraction)
-                            .height(5.dp)
-                            .background(Color(0xFF6B7280))
-                    )
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth(playedFraction)
-                            .height(5.dp)
-                            .background(MaterialTheme.colorScheme.primary)
-                    )
-                }
-            }
-
-            if (dragEnabled) {
+             if (dragEnabled) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.Center)
