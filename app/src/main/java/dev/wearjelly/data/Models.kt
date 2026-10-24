@@ -34,7 +34,8 @@ data class JellyfinItem(
     @SerialName("Overview") val overview: String? = null,
     @SerialName("SortName") val sortName: String? = null,
     @SerialName("Bitrate") val bitrate: Int? = null,
-    @SerialName("MediaSources") val mediaSources: List<MediaSourceInfo> = emptyList()
+    @SerialName("MediaSources") val mediaSources: List<MediaSourceInfo> = emptyList(),
+    @SerialName("UserData") val userData: JellyfinUserData? = null
 ) {
     val artistText: String
         get() = when {
@@ -45,7 +46,17 @@ data class JellyfinItem(
 
     val durationMs: Long
         get() = (runTimeTicks ?: 0L) / 10000L
+
+    /** 列表行内直读的收藏角标；权威集合请用 AppViewModel.favoriteIds。 */
+    val favorite: Boolean
+        get() = userData?.isFavorite == true
 }
+
+/** 条目级用户数据（服务器按用户挂在 BaseItemDto.userData 上）。 */
+@Serializable
+data class JellyfinUserData(
+    @SerialName("IsFavorite") val isFavorite: Boolean = false
+)
 
 @Serializable
 data class MediaSourceInfo(
@@ -163,6 +174,20 @@ internal data class JellyfinItemsResult(
     @SerialName("Items") val items: List<JellyfinItem> = emptyList(),
     @SerialName("TotalRecordCount") val totalRecordCount: Int = 0
 )
+
+/**
+ * 收藏/取消收藏响应体（服务端 UserItemDataDto），见 docs/favorite-design.md §3.1。
+ * [favorite] 双读 PascalCase/camelCase：服务器 JSON 命名策略随版本变化，避免误读为 false 造成心形回跳。
+ */
+@Serializable
+internal data class JellyfinUserItemDataDto(
+    @SerialName("IsFavorite") val isFavorite: Boolean = false,
+    @SerialName("Played") val played: Boolean = false,
+    @SerialName("isFavorite") val isFavoriteCamel: Boolean? = null
+) {
+    val favorite: Boolean
+        get() = isFavorite || isFavoriteCamel == true
+}
 
 @Serializable
 internal data class JellyfinPlaybackProgressRequest(

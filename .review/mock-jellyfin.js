@@ -2,6 +2,16 @@
 // 实现 WearJelly 用到的最小端点集：登录 / 曲库 / 歌词 / 音频流 / 上报。
 // 音频为脚本内生成的 5 分钟 8kHz 16-bit WAV（440Hz 正弦），seek 靠 WAV 头由 Media3 本地换算。
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
+
+// 预生成的真 MP3（ffmpeg libmp3lame 128kbps，与 WAV 同长 5 分钟）。
+const MP3_PATH = path.join(__dirname, 'mock-audio.mp3');
+let mp3Buf = null;
+function mp3() {
+  if (!mp3Buf) mp3Buf = fs.readFileSync(MP3_PATH);
+  return mp3Buf;
+}
 
 const SAMPLE_RATE = 8000;
 const DURATION_S = 300; // 5 分钟
@@ -78,6 +88,18 @@ const server = http.createServer((req, res) => {
     return json(res, 200, { Lyrics: lyricLines });
   }
   if (req.method === 'GET' && /\/Audio\/[^/]+\/stream/.test(url)) {
+    // app 以 stream.mp3?audioCodec=mp3 请求转码流；提供预生成的真 MP3（ffmpeg libmp3lame），
+    // 其余（无扩展名/其它 codec）回退 WAV。Media3 按扩展名/Content-Type 解析，格式必须匹配。
+    const wantsMp3 = /\.mp3($|\?)/.test(url) || url.includes('audioCodec=mp3');
+    if (wantsMp3) {
+      const buf = mp3();
+      res.writeHead(200, {
+        'Content-Type': 'audio/mpeg',
+        'Content-Length': buf.length,
+        'Accept-Ranges': 'bytes',
+      });
+      return res.end(buf);
+    }
     const buf = wav();
     res.writeHead(200, {
       'Content-Type': 'audio/wav',

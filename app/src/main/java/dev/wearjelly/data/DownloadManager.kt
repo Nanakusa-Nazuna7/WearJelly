@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.withTransaction
 import dev.wearjelly.data.offline.OfflineDatabase
 import dev.wearjelly.data.offline.offlineServerKey
+import dev.wearjelly.data.offline.toTrackEntity
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
@@ -67,20 +68,96 @@ class DownloadManager(
     private val downloadsDir: File
         get() = File(context.filesDir, "audio_downloads").apply { if (!exists()) mkdirs() }
 
-    private val indexFile: File
+    /** 旧版全局缓存索引，一次性归因迁入 Room 后删除（见 [migrateLegacyIndex]）。 */
+    private val legacyIndexFile: File
         get() = File(context.filesDir, "downloads_index.json")
 
+    /** 当前 _downloads/_queue 的作用域 key；被 session 收集协程写、worker/UI 协程读 → @Volatile。 */
+    @Volatile
+    private var downloadsServerKey: String? = null
+    private var sessionScopeLoaded = false
+
     init {
-        loadIndex()
-        workerScope.launch { restorePersistentQueue() }
+        // F13：_downloads 按 serverKey 作用域，会话每次变化（含首个值）重载；
+        // StateFlow 等值不重发，故 key 不变时 reloadSessionState 直接返回。
+        workerScope.launch { repository.session.collect { reloadSessionState() } }
     }
 
     private fun currentServerKey(): String? = repository.session.value?.let {
         offlineServerKey(it.serverUrl, it.userId)
     }
 
-    private suspend fun restorePersistentQueue() {
-        val serverKey = currentServerKey() ?: return
+    /** 会话 key 缺失（登出后的离线模式）时回退到最近一次同步成功的账号，与 OfflineLibraryReader 一致。 */
+    private suspend fun effectiveServerKey(): String? =
+        currentServerKey() ?: database.profiles().lastUsable()?.serverKey
+
+    private suspend fun reloadSessionState() {
+        val key = effectiveServerKey()
+        migrateLegacyIndex(key)
+        if (sessionScopeLoaded && key == downloadsServerKey) return
+        sessionScopeLoaded = true
+        downloadsServerKey = key
+        _downloads.value = loadDownloadsFromRoom(key)
+        _progress.value = emptyMap()
+        restoreQueue(key)
+    }
+
+    /** Room 权威读：该账号下已落本地音频文件的缓存曲目 → DownloadedSong。 */
+    private suspend fun loadDownloadsFromRoom(key: String?): List<DownloadedSong> {
+        if (key == null) return emptyList()
+        return database.tracks().all(key)
+            .filter { track -> track.localAudioPath?.let { path -> File(path).isFile } == true }
+            .mapNotNull { track ->
+                val item = runCatching { json.decodeFromString<JellyfinItem>(track.metadataJson) }.getOrNull()
+                    ?: return@mapNotNull null
+                DownloadedSong(
+                    item = item,
+                    localFilePath = track.localAudioPath!!,
+                    localCoverPath = track.localCoverPath,
+                    downloadedTimeMs = track.downloadedTimeMs ?: System.currentTimeMillis(),
+                    qualityLabel = track.qualityLabel ?: "未知音质",
+                )
+            }
+    }
+
+    /**
+     * 旧全局 downloads_index.json 按归属归因迁入 Room：条目 item 已有其它账号 TrackEntity 的归到该账号，
+     * 无归属的归到当前 key（只有当前会话能见到）；迁移完成删除文件。无会话时保留文件等下次归因。
+     */
+    private suspend fun migrateLegacyIndex(currentKey: String?) {
+        val legacy = legacyIndexFile
+        if (!legacy.exists() || currentKey == null) return
+        val records = runCatching { json.decodeFromString<List<DownloadedSong>>(legacy.readText()) }.getOrNull()
+            ?: return // 解析失败保留原文件，避免毁数据
+        val profiles = database.profiles().all()
+        database.withTransaction {
+            records.forEach { record ->
+                if (!File(record.localFilePath).exists()) return@forEach
+                val owner = profiles.firstOrNull { profile -> database.tracks().get(profile.serverKey, record.item.id) != null }
+                when {
+                    owner == null -> database.tracks().upsert(
+                        record.item.toTrackEntity(currentKey).copy(
+                            localAudioPath = record.localFilePath,
+                            localCoverPath = record.localCoverPath,
+                            downloadedTimeMs = record.downloadedTimeMs,
+                            qualityLabel = record.qualityLabel,
+                        )
+                    )
+                    owner.serverKey == currentKey && database.tracks().get(owner.serverKey, record.item.id)?.localAudioPath == null ->
+                        database.tracks().updateMediaState(owner.serverKey, record.item.id, record.localFilePath, record.localCoverPath, record.downloadedTimeMs, record.qualityLabel)
+                    else -> Unit // 已归属其它账号或已回填
+                }
+            }
+        }
+        legacy.delete()
+    }
+
+    /** 按 serverKey 替换式恢复持久下载队列（换账号时旧账号排队项从 UI 清除）。 */
+    private suspend fun restoreQueue(serverKey: String?) {
+        if (serverKey == null) {
+            _queue.value = emptyList()
+            return
+        }
         database.downloadTasks().recoverRunning(serverKey)
         val tasks = database.downloadTasks().all(serverKey)
         val restored = tasks.filter { it.status == "WAITING" || it.status == "RUNNING" }
@@ -89,41 +166,8 @@ class DownloadManager(
                     QueueEntry(item.id, item.name, item.artistText, DownloadStatus.WAITING, task.downloadedBytes, task.totalBytes, qualityLabel = task.qualityLabel.orEmpty())
                 }
             }
-        if (restored.isNotEmpty()) {
-            _queue.value = (_queue.value + restored).distinctBy { it.itemId }
-            startWorker()
-        }
-        tasks.filter { it.status == "DONE" }.forEach { task ->
-            val track = database.tracks().get(serverKey, task.itemId)
-            val audio = track?.localAudioPath?.let(::File)
-            if (track != null && audio?.exists() == true && _downloads.value.none { it.item.id == track.itemId }) {
-                val item = runCatching { json.decodeFromString<JellyfinItem>(track.metadataJson) }.getOrNull() ?: return@forEach
-                _downloads.value = _downloads.value + DownloadedSong(item, audio.absolutePath, track.localCoverPath, track.downloadedTimeMs ?: System.currentTimeMillis(), track.qualityLabel ?: "未知音质")
-            }
-        }
-    }
-
-    private fun loadIndex() {
-        if (!indexFile.exists()) {
-            _downloads.value = emptyList()
-            return
-        }
-        try {
-            val list = json.decodeFromString<List<DownloadedSong>>(indexFile.readText())
-            _downloads.value = list.filter { File(it.localFilePath).exists() }
-        } catch (e: Exception) {
-            e.printStackTrace()
-            _downloads.value = emptyList()
-        }
-    }
-
-    private fun saveIndex(list: List<DownloadedSong>) {
-        try {
-            indexFile.writeText(json.encodeToString(list))
-            _downloads.value = list
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        _queue.value = restored
+        if (restored.isNotEmpty()) startWorker()
     }
 
     fun isDownloaded(itemId: String): Boolean {
@@ -322,7 +366,11 @@ class DownloadManager(
                     downloadedTimeMs = System.currentTimeMillis(),
                     qualityLabel = qualityLabel,
                 )
-                saveIndex(_downloads.value.filter { it.item.id != item.id } + record)
+                // F13：Room 事务（下方）是权威落库；内存态只在作用域仍是本下载的 key 时更新，
+                // 防止下载中途切账号把旧账号记录写进新账号的 _downloads。
+                if (serverKey == downloadsServerKey) {
+                    _downloads.value = _downloads.value.filter { it.item.id != item.id } + record
+                }
                 serverKey?.let { key ->
                     database.withTransaction {
                         database.tracks().updateMediaState(key, item.id, targetFile.absolutePath, if (coverSaved) coverFile.absolutePath else null, record.downloadedTimeMs, qualityLabel)
@@ -350,13 +398,14 @@ class DownloadManager(
         } catch (e: Exception) {
             e.printStackTrace()
         }
-        repository.session.value?.let { session ->
-            val key = offlineServerKey(session.serverUrl, session.userId)
+        // F13：按当前加载作用域清理 Room 媒体状态（原用 session key，登出离线时为 null 会漏清）。
+        downloadsServerKey?.let { key ->
             workerScope.launch {
+                database.tracks().updateMediaState(key, itemId, null, null, null, null)
                 database.images().updateLocalState(key, "${itemId}:Primary", null, "METADATA")
             }
         }
-        saveIndex(_downloads.value.filter { it.item.id != itemId })
+        _downloads.value = _downloads.value.filter { it.item.id != itemId }
         _queue.value = _queue.value.filter { it.itemId != itemId }
     }
 }

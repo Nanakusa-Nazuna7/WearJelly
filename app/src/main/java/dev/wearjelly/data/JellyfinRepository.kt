@@ -173,6 +173,134 @@ class JellyfinRepository(
         }
     }
 
+    /**
+     * true = 服务器不认 10.9+ 的 /UserFavoriteItems 路由，写收藏直接走老路由 /Users/{userId}/FavoriteItems。
+     * 任一路由 404 时翻转并缓存，避免每次双请求；切换服务器后若新服务器也不认老路由会自愈重置。
+     */
+    private @Volatile var legacyFavoriteRoute: Boolean = false
+    /** true = /Users/{userId}/Items?isFavorite 查询路由已确认 404（Jellyfin 12.x 移除），改走 /Items?userId= 根路由。 */
+    private @Volatile var rootFavoriteQuery: Boolean = false
+
+    /**
+     * 全量收藏 id 集合。内部分页（StartIndex/Limit），本次最多取 maxItems 条（默认 3000，对齐 AppViewModel.MAX_FETCH_ITEMS）。
+     * 查询路由：首选 /Users/{userId}/Items?isFavorite=true（本项目既有路由，Jellyfin 10.7-10.10）；
+     * 404 回退 /Items?userId=...&isFavorite=true（Jellyfin 12.x 唯一文档化写法）。
+     * 未登录抛 JellyfinException("未登录", 401)。契约见 docs/favorite-design.md §3.2。
+     */
+    suspend fun getFavoriteIds(
+        startIndex: Int = 0,
+        limit: Int = 300,
+        maxItems: Int = 3000
+    ): Set<String> = withContext(Dispatchers.IO) {
+        val currentSession = session.value ?: throw JellyfinException("未登录", 401)
+        val server = currentSession.serverUrl
+        val userId = currentSession.userId
+        val token = currentSession.accessToken
+        val ids = LinkedHashSet<String>()
+        var offset = startIndex
+        val pageSize = limit.coerceAtLeast(1)
+        var switched = false
+        while (ids.size < maxItems) {
+            val pageLimit = minOf(pageSize, maxItems - ids.size)
+            val page = fetchFavoritePage(server, userId, token, offset, pageLimit, allowSwitch = !switched)
+            if (page == null) {
+                // 已切换到回退路由，同 offset 重试；每次调用最多切换一次，防止两路由 404 时来回震荡
+                switched = true
+                continue
+            }
+            if (page.items.isEmpty()) break
+            ids.addAll(page.items.map { it.id })
+            offset += page.items.size
+            if (page.totalRecordCount in 1..offset) break
+            if (page.items.size < pageLimit) break
+        }
+        ids
+    }
+
+    /** 收藏列表单页；null = 已翻转路由标志需要以同参数重试。 */
+    private fun fetchFavoritePage(
+        server: String,
+        userId: String,
+        token: String,
+        startIndex: Int,
+        limit: Int,
+        allowSwitch: Boolean
+    ): JellyfinItemsResult? {
+        val types = "IncludeItemTypes=Audio,MusicAlbum,Playlist,MusicArtist"
+        val path = if (!rootFavoriteQuery) {
+            "/Users/$userId/Items?isFavorite=true&Recursive=true&$types" +
+                "&StartIndex=$startIndex&Limit=$limit&SortBy=SortName&SortOrder=Ascending"
+        } else {
+            "/Items?userId=$userId&isFavorite=true&recursive=true&$types" +
+                "&startIndex=$startIndex&limit=$limit&sortBy=SortName&sortOrder=Ascending"
+        }
+        val request = Request.Builder()
+            .url("$server$path")
+            .get()
+            .header("X-Emby-Authorization", authHeader(token))
+            .build()
+        return client.newCall(request).execute().use { response ->
+            if (response.code == 404 && allowSwitch) {
+                rootFavoriteQuery = !rootFavoriteQuery
+                return@use null
+            }
+            if (!response.isSuccessful) {
+                throw JellyfinException("获取收藏失败 (HTTP ${response.code})", response.code)
+            }
+            val bodyString = response.body?.string() ?: throw JellyfinException("收藏数据为空")
+            json.decodeFromString<JellyfinItemsResult>(bodyString)
+        }
+    }
+
+    /**
+     * 设置收藏状态（非盲目 toggle）。返回服务端确认后的 isFavorite（解析 200 响应体 UserItemDataDto.favorite）。
+     * 路由：POST/DELETE /UserFavoriteItems/{itemId}?userId=...（10.9+）；
+     * 404 回退 POST/DELETE /Users/{userId}/FavoriteItems/{itemId}（10.7/10.8 老路由，回退成功后缓存 legacyFavoriteRoute）。
+     * 失败抛 JellyfinException。契约见 docs/favorite-design.md §3.2。
+     */
+    suspend fun setFavorite(itemId: String, favorite: Boolean): Boolean = withContext(Dispatchers.IO) {
+        val currentSession = session.value ?: throw JellyfinException("未登录", 401)
+        val encodedId = URLEncoder.encode(itemId, "UTF-8")
+        val userId = currentSession.userId
+        val method = if (favorite) "POST" else "DELETE"
+
+        fun call(path: String): Boolean? {
+            val request = Request.Builder()
+                .url("${currentSession.serverUrl}$path")
+                .method(method, if (favorite) ByteArray(0).toRequestBody(jsonMediaType) else null)
+                .header("X-Emby-Authorization", authHeader(currentSession.accessToken))
+                .build()
+            return client.newCall(request).execute().use { response ->
+                if (response.code == 404) return@use null // 路由不存在 → 交给回退
+                if (!response.isSuccessful) {
+                    throw JellyfinException("收藏操作失败 (HTTP ${response.code})", response.code)
+                }
+                val body = response.body?.string().orEmpty()
+                if (body.isBlank()) return@use favorite // 空响应 → 采纳请求目标态
+                try {
+                    json.decodeFromString<JellyfinUserItemDataDto>(body).favorite
+                } catch (_: Exception) {
+                    favorite // 响应体不可解析 → 采纳请求目标态
+                }
+            }
+        }
+
+        val primaryPath = "/UserFavoriteItems/$encodedId?userId=$userId"
+        val legacyPath = "/Users/$userId/FavoriteItems/$encodedId"
+        var confirmed: Boolean? = if (legacyFavoriteRoute) null else call(primaryPath)
+        if (confirmed == null) {
+            confirmed = call(legacyPath)
+            if (confirmed != null) {
+                legacyFavoriteRoute = true
+            } else if (legacyFavoriteRoute) {
+                // 老路由也 404：可能切换了服务器，自愈重置后再试现代路由一次
+                legacyFavoriteRoute = false
+                confirmed = call(primaryPath)
+            }
+        }
+        confirmed ?: throw JellyfinException("收藏操作失败 (HTTP 404)", 404)
+    }
+
     val bitrate: StateFlow<AudioBitrate> = store.bitrate
 
     fun setBitrate(newBitrate: AudioBitrate) {

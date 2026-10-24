@@ -4,6 +4,7 @@ import android.app.PendingIntent
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import java.io.File
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -49,6 +50,16 @@ class PlaybackService : MediaSessionService() {
     private var mediaSession: MediaSession? = null
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    /**
+     * t26/H1：存活至进程结束的应用级 scope（仍为 Main 单线程派发，保持 save/report 的
+     * 既有串行语义，不引入并发写）。onDestroy 的持久化与 STOP 上报必须投到这里：
+     * 原实现 serviceScope.launch{...} 之后紧接 serviceScope.cancel()，两个协程从未执行
+     * → 播放进度与 STOP 事件永久丢失。选应用级异步而非 runBlocking 同步执行：
+     * reportEvent 内含网络请求，同步阻塞 onDestroy 主线程有 ANR 风险；文件保存与
+     * 网络上报在服务销毁后的进程存活窗口内完成（stopWithTask=false 时滑掉任务仅停
+     * 服务、宿主进程通常仍在），且投递前已同步捕获 player 快照，严格优于“从不执行”。
+     */
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var progressReportJob: Job? = null
     private var currentPlayingItemId: String? = null
     private var lastPlaybackPersistAt = 0L
@@ -65,6 +76,8 @@ class PlaybackService : MediaSessionService() {
         const val CUSTOM_COMMAND_PREVIOUS_HISTORY = "dev.wearjelly.PREVIOUS_HISTORY"
 
         const val EXTRA_ITEMS_JSON = "extra_items_json"
+        /** t26/H2：队列载荷中转文件路径（Bundle 只携带路径，整包 JSON 不再走 Binder） */
+        const val EXTRA_ITEMS_FILE = "extra_items_file"
         const val EXTRA_START_INDEX = "extra_start_index"
         const val EXTRA_FROM_INDEX = "extra_from_index"
         const val EXTRA_TO_INDEX = "extra_to_index"
@@ -147,15 +160,14 @@ class PlaybackService : MediaSessionService() {
             ): ListenableFuture<SessionResult> {
                 when (customCommand.customAction) {
                     CUSTOM_COMMAND_SET_QUEUE -> {
-                        val itemsJson = args.getString(EXTRA_ITEMS_JSON)
                         val startIndex = args.getInt(EXTRA_START_INDEX, 0)
-                        if (!itemsJson.isNullOrBlank()) {
-                            try {
-                                val items = json.decodeFromString<List<JellyfinItem>>(itemsJson)
+                        try {
+                            val items = readItemsPayload(args)
+                            if (items != null) {
                                 handleSetQueue(items, startIndex)
-                            } catch (e: Exception) {
-                                e.printStackTrace()
                             }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
                         }
                     }
                     CUSTOM_COMMAND_ENQUEUE -> {
@@ -170,31 +182,35 @@ class PlaybackService : MediaSessionService() {
                         }
                     }
                     CUSTOM_COMMAND_ENQUEUE_MANY -> {
-                        val itemsJson = args.getString(EXTRA_ITEMS_JSON)
-                        if (!itemsJson.isNullOrBlank()) {
-                            try {
-                                val items = json.decodeFromString<List<JellyfinItem>>(itemsJson)
-                                handleEnqueueMany(items)
-                            } catch (e: Exception) {
-                                e.printStackTrace()
+                        try {
+                            val items = readItemsPayload(args)
+                            if (items == null) {
                                 return Futures.immediateFuture(
                                     SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE)
                                 )
                             }
+                            handleEnqueueMany(items)
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                            return Futures.immediateFuture(
+                                SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE)
+                            )
                         }
                     }
                     CUSTOM_COMMAND_INSERT_NEXT -> {
-                        val itemsJson = args.getString(EXTRA_ITEMS_JSON)
-                        if (!itemsJson.isNullOrBlank()) {
-                            try {
-                                val items = json.decodeFromString<List<JellyfinItem>>(itemsJson)
-                                handleInsertNext(items)
-                            } catch (e: Exception) {
-                                e.printStackTrace()
+                        try {
+                            val items = readItemsPayload(args)
+                            if (items == null) {
                                 return Futures.immediateFuture(
                                     SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE)
                                 )
                             }
+                            handleInsertNext(items)
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                            return Futures.immediateFuture(
+                                SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE)
+                            )
                         }
                     }
                     CUSTOM_COMMAND_REMOVE_AT -> {
@@ -307,6 +323,27 @@ class PlaybackService : MediaSessionService() {
         exo.play()
     }
 
+    /**
+     * t26/H2：队列载荷从应用 cache 的中转文件读取（Bundle 只携带路径，规避 Binder
+     * ~1MB TransactionTooLargeException），读取后即删。路径必须落在 queue_payloads
+     * 目录内——onCustomCommand 也可能由系统控制器发起，防任意路径读取/删除。
+     * 路径缺失时回退旧的内联 JSON（小载荷/兼容路径）；解析失败抛给调用方 catch。
+     */
+    private fun readItemsPayload(args: Bundle): List<JellyfinItem>? {
+        val path = args.getString(EXTRA_ITEMS_FILE)
+        if (!path.isNullOrBlank()) {
+            val file = runCatching { File(path).canonicalFile }.getOrNull() ?: return null
+            val root = runCatching { File(cacheDir, QUEUE_PAYLOAD_DIR).canonicalFile }.getOrNull() ?: return null
+            if (file.path != root.path && !file.path.startsWith(root.path + File.separator)) return null
+            val text = runCatching { file.takeIf { it.exists() }?.readText() }.getOrNull()
+            file.delete()
+            if (text.isNullOrBlank()) return null
+            return json.decodeFromString<List<JellyfinItem>>(text)
+        }
+        val inline = args.getString(EXTRA_ITEMS_JSON)
+        return if (inline.isNullOrBlank()) null else json.decodeFromString(inline)
+    }
+
     private fun handleEnqueue(item: JellyfinItem) {
         handleEnqueueMany(listOf(item))
     }
@@ -413,15 +450,20 @@ class PlaybackService : MediaSessionService() {
         val index = exo.currentMediaItemIndex
         val (cappedQueue, cappedIndex) = dev.wearjelly.data.LastPlaybackStore.capQueueAroundIndex(items, index)
         val trackId = exo.currentMediaItem?.mediaId ?: cappedQueue.getOrNull(cappedIndex)?.id ?: return
-        serviceScope.launch {
+        // t26/H1：先同步捕获 player 快照再投递——onDestroy 场景下 appScope 协程在
+        // mediaSession/player.release() 之后才执行，不能再读已释放的 ExoPlayer
+        val positionMs = exo.currentPosition.coerceAtLeast(0L)
+        val repeatMode = exo.repeatMode
+        val shuffleEnabled = exo.shuffleModeEnabled
+        appScope.launch {
             lastPlaybackStore.save(
                 dev.wearjelly.data.LastPlayback(
                     trackId = trackId,
                     queue = cappedQueue,
                     queueIndex = cappedIndex,
-                    positionMs = exo.currentPosition.coerceAtLeast(0L),
-                    repeatMode = exo.repeatMode,
-                    shuffleEnabled = exo.shuffleModeEnabled,
+                    positionMs = positionMs,
+                    repeatMode = repeatMode,
+                    shuffleEnabled = shuffleEnabled,
                     updatedAt = now,
                 )
             )
@@ -492,7 +534,10 @@ class PlaybackService : MediaSessionService() {
         val itemId = specificItemId ?: exo.currentMediaItem?.mediaId ?: return
         val pos = exo.currentPosition
         val isPaused = !exo.isPlaying
-        serviceScope.launch {
+        // t26/H1：改投 appScope——serviceScope 在 onDestroy 中紧随其后被 cancel()，
+        // 原实现的 STOP 上报协程从未执行；网络上报也不宜 runBlocking 阻塞主线程。
+        // itemId/pos/isPaused 已在投递前同步捕获，协程体内不再触碰 player。
+        appScope.launch {
             repository.reportPlayback(itemId, pos, isPaused, event)
         }
     }
@@ -502,6 +547,9 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        // t26/H1：persistLastPlayback 与下方 STOP 上报已投递到 appScope（不随紧随其后的
+        // serviceScope.cancel() 取消），且 player 快照在投递时同步捕获——原实现
+        // serviceScope.launch{...} + 立即 cancel() 使两个协程从未执行（进度/STOP 全丢）
         persistLastPlayback(force = true)
         stopProgressReporting()
         reportEvent(PlaybackEvent.STOP)

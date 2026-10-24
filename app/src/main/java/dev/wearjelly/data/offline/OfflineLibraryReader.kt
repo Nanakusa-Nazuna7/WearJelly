@@ -6,10 +6,17 @@ import dev.wearjelly.data.LibraryKind
 
 /** Reads the last complete Room snapshot without touching the network. */
 class OfflineLibraryReader(private val database: OfflineDatabase) {
-    suspend fun hasSnapshot(): Boolean = database.profiles().lastUsable() != null
+    /**
+     * serverKey = 当前会话作用域：非空时只读该账号的离线快照（跨账号隔离）；
+     * null（登出后的离线模式）回退到最近一次同步成功的任意账号快照。
+     */
+    private suspend fun scopedProfile(serverKey: String?): ServerProfileEntity? =
+        if (serverKey == null) database.profiles().lastUsable() else database.profiles().lastUsableFor(serverKey)
 
-    suspend fun lyrics(itemId: String): dev.wearjelly.data.LyricsResult {
-        val profile = database.profiles().lastUsable() ?: return dev.wearjelly.data.LyricsResult.Error("无离线曲库")
+    suspend fun hasSnapshot(serverKey: String? = null): Boolean = scopedProfile(serverKey) != null
+
+    suspend fun lyrics(itemId: String, serverKey: String? = null): dev.wearjelly.data.LyricsResult {
+        val profile = scopedProfile(serverKey) ?: return dev.wearjelly.data.LyricsResult.Error("无离线曲库")
         val entity = database.lyrics().get(profile.serverKey, itemId)
             ?: return dev.wearjelly.data.LyricsResult.NotFound
         return when (entity.state) {
@@ -26,9 +33,10 @@ class OfflineLibraryReader(private val database: OfflineDatabase) {
         parentId: String? = null,
         artistId: String? = null,
         offset: Int,
-        limit: Int
+        limit: Int,
+        serverKey: String? = null
     ): ItemPage {
-        val profile = database.profiles().lastUsable() ?: return ItemPage(emptyList(), 0)
+        val profile = scopedProfile(serverKey) ?: return ItemPage(emptyList(), 0)
         val key = profile.serverKey
         val items = when (query) {
             LibraryKind.PLAYLISTS -> database.playlists().all(key).map { playlist ->

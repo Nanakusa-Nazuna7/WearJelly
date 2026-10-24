@@ -11,10 +11,12 @@ import dev.wearjelly.data.SongLyrics
 import dev.wearjelly.data.normalizeServerUrl
 import dev.wearjelly.data.offline.OfflineLibraryReader
 import dev.wearjelly.data.offline.SyncState
+import dev.wearjelly.data.offline.offlineServerKey
 import dev.wearjelly.playback.PlaybackConnection
 import dev.wearjelly.playback.PlaybackState
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -23,6 +25,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 internal data class LibraryQuery(
     val kind: LibraryKind,
@@ -131,6 +134,9 @@ class AppViewModel(
     val lastPlayback: StateFlow<dev.wearjelly.data.LastPlayback?> = lastPlaybackStore.lastPlayback
     val cachedTrackIds: StateFlow<Set<String>> = downloadManager.cachedTrackIds
     val offlineSyncState: StateFlow<SyncState> = offlineSync.state
+    /** 全量收藏 id（服务端为真值；离线/未登录为空集）——播放页心形与收藏列表统一订阅（docs/favorite-design.md §3.3）。 */
+    private val _favoriteIds = MutableStateFlow<Set<String>>(emptySet())
+    val favoriteIds: StateFlow<Set<String>> = _favoriteIds.asStateFlow()
     private val _downloadManagementItems = MutableStateFlow<List<JellyfinItem>>(emptyList())
     internal val downloadManagementItems: StateFlow<List<JellyfinItem>> = _downloadManagementItems.asStateFlow()
     internal val isOfflineMode: Boolean get() = offlineMode
@@ -146,6 +152,9 @@ class AppViewModel(
     private var generation = 0L
     private var loginJob: Job? = null
     private var lyricsJob: Job? = null
+    private var favoriteJob: Job? = null
+    /** t23-F1：进行中的收藏切换 itemId；重复点击在 settle 前被忽略。 */
+    private val favoriteTogglesInFlight: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
     private val libraryJobs = mutableMapOf<LibraryQuery, Job>()
     private var nextLogin: LoginUi? = null
 
@@ -181,6 +190,7 @@ class AppViewModel(
         offlineMode = value == null && offlineMode
         refreshOfflineCachedEntities()
         generation += 1
+        favoriteTogglesInFlight.clear()
         loginJob?.cancel()
         libraryJobs.values.forEach(Job::cancel)
         libraryJobs.clear()
@@ -207,6 +217,31 @@ class AppViewModel(
             }
         }
         if (value != null) reconnectPlayback()
+        refreshFavorites()
+    }
+
+    /**
+     * 登录/切服后拉取全量收藏（[generation] 守卫丢弃过期响应）。
+     * 失败静默降级：收藏是次要能力，不打扰主流程（docs/favorite-design.md §3.3-7）。
+     * 离线/未登录置空集（约定 4/5）。
+     */
+    private fun refreshFavorites() {
+        favoriteJob?.cancel()
+        val targetGeneration = generation
+        if (offlineMode || repository.session.value == null) {
+            _favoriteIds.value = emptySet()
+            return
+        }
+        favoriteJob = viewModelScope.launch {
+            try {
+                val ids = repository.getFavoriteIds(maxItems = MAX_FETCH_ITEMS)
+                if (targetGeneration == generation) _favoriteIds.value = ids
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // 拉取失败保持现状，下次会话变化时重试
+            }
+        }
     }
 
     internal fun changeServer(value: String) = changeLogin { copy(server = value) }
@@ -269,7 +304,7 @@ class AppViewModel(
             _downloadManagementItems.value = if (offlineMode) {
                 val cachedIds = downloadManager.cachedTrackIds.value
                 dev.wearjelly.data.PinyinSort.sort(
-                    offlineReader.page(LibraryKind.SONGS, null, null, null, 0, Int.MAX_VALUE).items
+                    offlineReader.page(LibraryKind.SONGS, null, null, null, 0, Int.MAX_VALUE, serverKey = offlineScopeKey()).items
                         .filter { it.id in cachedIds }
                 )
             } else {
@@ -410,7 +445,7 @@ class AppViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                if (requestGeneration == generation && !offlineMode && offlineReader.hasSnapshot() && isNetworkFailure(error)) {
+                if (requestGeneration == generation && !offlineMode && offlineReader.hasSnapshot(offlineScopeKey()) && isNetworkFailure(error)) {
                     offlineMode = true
                     refreshOfflineCachedEntities()
                     loadOfflineLibrary(query, fromStart, old)
@@ -423,7 +458,7 @@ class AppViewModel(
 
     private suspend fun loadOfflineLibrary(query: LibraryQuery, fromStart: Boolean, old: LibraryUi) {
         val offset = if (fromStart) 0 else old.nextOffset
-        val page = offlineReader.page(query.kind, query.playlistId, query.parentId, query.artistId, offset, PAGE_SIZE)
+        val page = offlineReader.page(query.kind, query.playlistId, query.parentId, query.artistId, offset, PAGE_SIZE, serverKey = offlineScopeKey())
         val items = if (fromStart) page.items else old.items + page.items
         val ordered = if (query.playlistId != null) items else dev.wearjelly.data.PinyinSort.sort(items.distinctBy { it.id })
         updateLibrary(query) {
@@ -440,12 +475,20 @@ class AppViewModel(
     }
 
     private fun isNetworkFailure(error: Throwable): Boolean = when (error) {
+        // t23-F5：JellyfinException 是 IOException 子类但代表 HTTP 层服务端错误
+        //（401/403/404/500…），不得误判为网络故障而静默切离线模式。
+        is JellyfinException -> false
         is java.net.ConnectException,
         is java.net.UnknownHostException,
         is java.net.SocketTimeoutException,
         is java.net.NoRouteToHostException,
         is IOException -> true
         else -> false
+    }
+
+    /** t23-F12：离线数据读取的会话作用域 key；未登录为 null（登出离线回退最近同步账号，见 OfflineLibraryReader）。 */
+    private fun offlineScopeKey(): String? = repository.session.value?.let {
+        offlineServerKey(it.serverUrl, it.userId)
     }
 
     /**
@@ -464,16 +507,20 @@ class AppViewModel(
                 _offlineCachedEntityIds.value = emptySet()
                 return@launch
             }
-            val ids = mutableSetOf<String>()
-            for (song in offlineReader.page(LibraryKind.SONGS, null, null, null, 0, Int.MAX_VALUE).items) {
-                if (song.id !in cachedIds) continue
-                song.albumId?.let { ids.add(it) }
-                song.artists.forEach { ids.add("name:$it") }
-                song.albumArtist?.let { ids.add("name:$it") }
-            }
-            for (playlist in offlineReader.page(LibraryKind.PLAYLISTS, null, null, null, 0, Int.MAX_VALUE).items) {
-                val tracks = offlineReader.page(LibraryKind.SONGS, playlist.id, null, null, 0, Int.MAX_VALUE).items
-                if (tracks.any { it.id in cachedIds }) ids.add(playlist.id)
+            val ids = withContext(Dispatchers.IO) {
+                // t23-F15：全量解码/分页在 IO 线程完成，避免主线程卡顿。
+                val built = mutableSetOf<String>()
+                for (song in offlineReader.page(LibraryKind.SONGS, null, null, null, 0, Int.MAX_VALUE, serverKey = offlineScopeKey()).items) {
+                    if (song.id !in cachedIds) continue
+                    song.albumId?.let { built.add(it) }
+                    song.artists.forEach { built.add("name:$it") }
+                    song.albumArtist?.let { built.add("name:$it") }
+                }
+                for (playlist in offlineReader.page(LibraryKind.PLAYLISTS, null, null, null, 0, Int.MAX_VALUE, serverKey = offlineScopeKey()).items) {
+                    val tracks = offlineReader.page(LibraryKind.SONGS, playlist.id, null, null, 0, Int.MAX_VALUE, serverKey = offlineScopeKey()).items
+                    if (tracks.any { it.id in cachedIds }) built.add(playlist.id)
+                }
+                built
             }
             _offlineCachedEntityIds.value = ids
         }
@@ -497,6 +544,52 @@ class AppViewModel(
         showNotice("已删除本地缓存")
     }
 
+    internal fun isFavorite(itemId: String): Boolean = itemId in favoriteIds.value
+
+    /**
+     * 收藏/取消收藏（乐观更新 + 失败回滚，docs/favorite-design.md §3.3 行为约定 3-6）：
+     * 先翻本地集合，请求成功以服务端响应校准，失败回滚并提示；离线提示后 no-op、未登录静默 no-op。
+     */
+    internal fun toggleFavorite(itemId: String) {
+        if (offlineMode) {
+            showNotice("离线模式下无法更改收藏。")
+            return
+        }
+        if (repository.session.value == null) return
+        // t23-F1：同一 itemId 请求进行中忽略重复点击（防双击两次乐观翻转+响应乱序致分歧）。
+        if (!favoriteTogglesInFlight.add(itemId)) return
+        val wasFavorite = itemId in favoriteIds.value
+        val target = !wasFavorite
+        val toggledGeneration = generation
+        _favoriteIds.update { if (target) it + itemId else it - itemId }
+        viewModelScope.launch {
+            try {
+                try {
+                    val confirmed = repository.setFavorite(itemId, target)
+                    if (toggledGeneration == generation) {
+                        _favoriteIds.update { if (confirmed) it + itemId else it - itemId }
+                        showNotice(if (confirmed) "已加入收藏" else "已取消收藏")
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    if (toggledGeneration == generation) {
+                        _favoriteIds.update { if (wasFavorite) it + itemId else it - itemId }
+                        // t23-F6：收藏链路 401 与登录失败文案区分。
+                        showNotice(
+                            if ((error as? JellyfinException)?.statusCode == 401) "登录已过期，请重新登录。"
+                            else userMessage(error)
+                        )
+                    }
+                }
+            } finally {
+                // t23-F1：settle 后以服务端真值校准（自带 generation 守卫；登出/离线时置空集无害）。
+                favoriteTogglesInFlight.remove(itemId)
+                refreshFavorites()
+            }
+        }
+    }
+
     internal fun setAudioBitrate(bitrate: dev.wearjelly.data.AudioBitrate) {
         repository.setBitrate(bitrate)
         showNotice("已切换音质: ${bitrate.displayName}")
@@ -512,7 +605,6 @@ class AppViewModel(
             navigate(AppScreen.Player)
             return
         }
-        android.util.Log.d("WJ", "playTrack ${item.name} connected=${playback.state.value.connected}")
         viewModelScope.launch {
             if (!waitForConnected()) {
                 showNotice("播放器连接失败，请重试")
@@ -762,7 +854,7 @@ class AppViewModel(
         var offset = 0
         while (true) {
             val page = if (offlineMode) {
-                offlineReader.page(LibraryKind.PLAYLISTS, null, null, null, offset, PAGE_SIZE)
+                offlineReader.page(LibraryKind.PLAYLISTS, null, null, null, offset, PAGE_SIZE, serverKey = offlineScopeKey())
             } else {
                 repository.getItems(kind = LibraryKind.PLAYLISTS, startIndex = offset, limit = PAGE_SIZE)
             }
@@ -790,6 +882,7 @@ class AppViewModel(
                     query.artistId,
                     offset,
                     PAGE_SIZE,
+                    serverKey = offlineScopeKey(),
                 )
                 if (page.items.isEmpty()) break
                 result += page.items
@@ -953,7 +1046,7 @@ class AppViewModel(
         mutableUi.update { it.copy(lyrics = LyricsUi(itemId = itemId, loading = true)) }
         lyricsJob = viewModelScope.launch {
             try {
-                val local = offlineReader.lyrics(itemId)
+                val local = offlineReader.lyrics(itemId, serverKey = offlineScopeKey())
                 if (local is dev.wearjelly.data.LyricsResult.Found || local is dev.wearjelly.data.LyricsResult.NotFound || offlineMode) {
                     applyLyricsResult(requestGeneration, itemId, local)
                     return@launch

@@ -17,6 +17,8 @@ interface ProfileDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(profile: ServerProfileEntity)
     @Query("SELECT * FROM ServerProfileEntity WHERE serverKey = :serverKey AND userId = :userId") suspend fun get(serverKey: String, userId: String): ServerProfileEntity?
     @Query("SELECT * FROM ServerProfileEntity WHERE isOfflineAvailable = 1 ORDER BY lastSuccessfulSyncMs DESC LIMIT 1") suspend fun lastUsable(): ServerProfileEntity?
+    @Query("SELECT * FROM ServerProfileEntity WHERE serverKey = :serverKey AND isOfflineAvailable = 1 ORDER BY lastSuccessfulSyncMs DESC LIMIT 1") suspend fun lastUsableFor(serverKey: String): ServerProfileEntity?
+    @Query("SELECT * FROM ServerProfileEntity") suspend fun all(): List<ServerProfileEntity>
 }
 @Dao
 interface TrackDao {

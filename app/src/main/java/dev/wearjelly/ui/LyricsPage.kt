@@ -54,7 +54,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.wear.compose.foundation.lazy.TransformingLazyColumn
 import androidx.wear.compose.foundation.lazy.itemsIndexed
@@ -71,6 +70,10 @@ import kotlinx.coroutines.delay
  * - 点击歌词行 = 预览（D1），2 秒内再点确认 seek；预览行白色、右缘字母条风格时间戳。
  * - 自动滚动跟随播放（手动滚动后 3s 内暂停；预览中暂停）；seek 后立即同步。
  * - 长按空白 → 歌词设置二级菜单（字号三档 / 每歌偏移）。
+ *
+ * t7 M3 规范化契约（t1 §6 #7/#8）：纯 androidx.wear.compose.material3——零 M2 导入、
+ * 不引入 Horologist（环形进度/预览/自动跟随/设置均为自研保留，色/字走 MaterialTheme），
+ * 滚动（自动跟随+手动暂停 3s）/环形进度（非拖动细环）/歌词设置功能零丢失。
  */
 @Composable
 internal fun LyricsPage(viewModel: AppViewModel) {
@@ -105,8 +108,6 @@ internal fun LyricsPage(viewModel: AppViewModel) {
     val durationMs = pbState.effectiveDurationMs
     val ringFraction = if (durationMs > 0) (displayMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
 
-    // 自动跟随：当前行变化时滚过去；用户手动滚动后 3s 内、预览中不跟随。
-    // followTarget 在组合期与列表内容同一份状态一起计算，避免跨组合竞态导致下标越界
     var lastUserScrollMs by remember { mutableStateOf(0L) }
     val stateItemCount = when {
         lyricsUi.loading -> 1

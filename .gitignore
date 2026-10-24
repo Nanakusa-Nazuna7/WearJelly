@@ -8,6 +8,8 @@ keystore.properties
 *.jks
 *.keystore
 /build-logs/
+.build-logs/
+.dsh-debug/
 /deliverables/
 *.apk
 *.aab
@@ -22,3 +24,5 @@ captures/
 verify-*.png
 diagnose-*.png
 .current-*.png
+.t15-backup/
+.horologist-src/

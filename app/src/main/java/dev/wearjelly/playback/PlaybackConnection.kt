@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.media.AudioManager
 import android.os.Bundle
+import java.io.File
 import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
@@ -31,6 +32,11 @@ import kotlin.coroutines.resume
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+
+// t26/H2：队列中转文件的 cache 子目录名与孤儿文件回收时限（命令未送达时的残留）
+// 目录名需被 PlaybackService.readItemsPayload 校验使用，故为 internal
+internal const val QUEUE_PAYLOAD_DIR = "queue_payloads"
+private const val QUEUE_PAYLOAD_TTL_MS = 60 * 60 * 1000L
 
 @OptIn(UnstableApi::class)
 class PlaybackConnection(
@@ -60,7 +66,27 @@ class PlaybackConnection(
     fun connect() {
         if (controller != null) return
         val sessionToken = SessionToken(context, ComponentName(context, PlaybackService::class.java))
-        val controllerFuture = MediaController.Builder(context, sessionToken).buildAsync()
+        val controllerFuture = MediaController.Builder(context, sessionToken)
+            .setListener(object : MediaController.Listener {
+                // t26/M3：服务进程被杀时 media3 走 binder 死亡 → 自动 release() → 回调本方法
+                // （MediaControllerImplBase.deathRecipient → MediaController.release() 内
+                // notifyControllerListener(onDisconnected)）。原实现不监听：字段与 connected
+                // 残留 true → UI 假连接、waitForConnected 立即放行而命令全部静默丢弃。
+                // 此处清空字段、停位置表、置断连，并延迟重绑——AppViewModel.connect() 仅在
+                // 启动时调用一次，这里是断连后唯一的恢复入口；重绑失败走下方 catch，
+                // 不会形成重试循环。
+                override fun onDisconnected(controller: MediaController) {
+                    if (this@PlaybackConnection.controller !== controller) return
+                    this@PlaybackConnection.controller = null
+                    stopPositionTicker()
+                    _state.update { it.copy(connected = false, isPlaying = false, buffering = false) }
+                    scope.launch {
+                        delay(1_000L)
+                        connect()
+                    }
+                }
+            })
+            .buildAsync()
         controllerFuture.addListener({
             try {
                 val c = controllerFuture.get()
@@ -186,10 +212,30 @@ class PlaybackConnection(
     fun play(items: List<JellyfinItem>, index: Int = 0) {
         val c = controller ?: return
         val args = Bundle().apply {
-            putString(PlaybackService.EXTRA_ITEMS_JSON, json.encodeToString(items))
+            // t26/H2：整包队列 JSON 不再直接进 Bundle 走 Binder（~1MB 上限），改走 cache 中转文件
+            putString(PlaybackService.EXTRA_ITEMS_FILE, writeQueuePayload(items))
             putInt(PlaybackService.EXTRA_START_INDEX, index)
         }
         c.sendCustomCommand(SessionCommand(PlaybackService.CUSTOM_COMMAND_SET_QUEUE, Bundle.EMPTY), args)
+    }
+
+    /**
+     * t26/H2：队列载荷中转——写入应用私有 cache 目录，Bundle 只携带路径，
+     * 规避数百首队列整包 JSON 触发的 TransactionTooLargeException。
+     * 选型权衡（临时文件 vs 进程内 holder）：holder 虽零 IO，但单槽位在 play()
+     * （fire-and-forget 不等回执）与 enqueue 连发时会互相覆盖，且强依赖服务同进程
+     * （当前 manifest 无 android:process 确实同进程，但语义脆弱）；文件方案每次命令
+     * 独立命名、读取即删，无竞态且进程隔离下同样成立。编码成本与原实现同阶
+     * （原先也在本线程 encodeToString），文件写入为毫秒级。
+     */
+    private fun writeQueuePayload(items: List<JellyfinItem>): String {
+        val dir = File(context.cacheDir, QUEUE_PAYLOAD_DIR).apply { mkdirs() }
+        // 顺手清理超过 1 小时的孤儿文件（命令未送达服务端时的残留）
+        val cutoff = System.currentTimeMillis() - QUEUE_PAYLOAD_TTL_MS
+        dir.listFiles()?.forEach { if (it.lastModified() < cutoff) it.delete() }
+        val file = File(dir, "q_${System.nanoTime()}.json")
+        file.writeText(json.encodeToString(items))
+        return file.absolutePath
     }
 
     suspend fun enqueue(item: JellyfinItem): Result<Unit> = enqueueMany(listOf(item))
@@ -205,7 +251,8 @@ class PlaybackConnection(
         if (items.isEmpty()) return Result.success(Unit)
         val c = controller ?: return Result.failure(IllegalStateException("播放器尚未连接"))
         val args = Bundle().apply {
-            putString(PlaybackService.EXTRA_ITEMS_JSON, json.encodeToString(items))
+            // t26/H2：同 play()——载荷走中转文件，Bundle 只携带路径
+            putString(PlaybackService.EXTRA_ITEMS_FILE, writeQueuePayload(items))
         }
         return try {
             val future = c.sendCustomCommand(SessionCommand(action, Bundle.EMPTY), args)

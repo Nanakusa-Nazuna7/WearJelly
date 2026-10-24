@@ -87,19 +87,31 @@ class OfflineLibrarySync(
         val session = loadSession() ?: error("未登录，无法同步曲库")
         val serverKey = offlineServerKey(session.serverUrl, session.userId)
 
-        val playlists = fetchAll { offset -> fetchPlaylists(offset, pageSize) }
+        // F14：会话一次捕获；每页请求前与最终落库前校验会话未切换，避免同步中途切账号
+        // 把 B 的页数据写进 A 的 serverKey 事务。必须抛普通异常而非 CancellationException
+        // （OfflineSyncCoordinator 会重抛后者并杀死 session collector 协程）。
+        suspend fun ensureSessionUnchanged() {
+            val current = loadSession()
+            if (current == null || current.serverUrl != session.serverUrl || current.userId != session.userId) {
+                error("会话已切换，中止本次同步")
+            }
+        }
+
+        val playlists = fetchAll { offset -> ensureSessionUnchanged(); fetchPlaylists(offset, pageSize) }
         _state.value = SyncState.Running(0, playlists.size)
 
-        val allLibraryTracks = fetchAll { offset -> fetchAllTracks(offset, pageSize) }
+        val allLibraryTracks = fetchAll { offset -> ensureSessionUnchanged(); fetchAllTracks(offset, pageSize) }
         val snapshots = ArrayList<Pair<JellyfinItem, List<JellyfinItem>>>(playlists.size)
         playlists.forEachIndexed { index, playlist ->
             snapshots += playlist to fetchAll { offset ->
+                ensureSessionUnchanged()
                 fetchPlaylistItems(playlist.id, offset, pageSize)
             }
             _state.value = SyncState.Running(index + 1, playlists.size)
         }
 
         val uniqueItems = (snapshots.flatMap { it.second } + allLibraryTracks).distinctBy { it.id }
+        ensureSessionUnchanged()
         val lyricsById = uniqueItems.associate { item ->
             item.id to try {
                 withTimeoutOrNull(LYRICS_FETCH_TIMEOUT_MS) { fetchLyrics(item.id) }
@@ -111,6 +123,7 @@ class OfflineLibrarySync(
 
         val now = System.currentTimeMillis()
         var trackCount = 0
+        ensureSessionUnchanged()
         database.withTransaction {
             database.profiles().upsert(
                 ServerProfileEntity(

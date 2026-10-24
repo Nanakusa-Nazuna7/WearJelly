@@ -21,7 +21,7 @@ android {
 
     defaultConfig {
         applicationId = "dev.wearjelly"
-        minSdk = 25
+        minSdk = 26
         targetSdk = 35
         versionCode = 5
         versionName = "1.4.0"
@@ -50,7 +50,7 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    buildFeatures { compose = true; buildConfig = true }
+    buildFeatures { compose = true; buildConfig = false }
     packaging { resources.excludes += setOf("META-INF/AL2.0", "META-INF/LGPL2.1") }
     testOptions { unitTests.isIncludeAndroidResources = true }
     lint { abortOnError = true; checkReleaseBuilds = true }
@@ -59,6 +59,8 @@ android {
 kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        // Horologist 公开 API 全量 @ExperimentalHorologistApi 标注，统一 opt-in（t1 第 1.1 节）
+        freeCompilerArgs.add("-opt-in=com.google.android.horologist.annotations.ExperimentalHorologistApi")
     }
 }
 
@@ -71,8 +73,9 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.wear.compose:compose-foundation:1.7.0")
     implementation("androidx.wear.compose:compose-material3:1.7.0")
-    implementation("androidx.wear.compose:compose-navigation3:1.7.0")
-    implementation("androidx.wear.compose:compose-ui-tooling:1.7.0")
+    // Horologist M3 (t1 决策：仅 Maven Central；M3 模块必取 0.8.x-alpha，0.7.15 stable 线无 M3)
+    implementation("com.google.android.horologist:horologist-media-ui-material3:0.8.4-alpha")
+    implementation("com.google.android.horologist:horologist-audio-ui-material3:0.8.4-alpha")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.6")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.6")
     implementation("androidx.media3:media3-exoplayer:1.4.1")
@@ -102,9 +105,15 @@ tasks.register("verifyNoGms") {
     description = "Reject Google Play services, Firebase, billing and wearable Play dependencies."
     doLast {
         val forbiddenGroups = listOf("com.google.android.gms", "com.google.firebase", "com.android.billingclient", "com.google.android.play", "com.google.android.support")
-        val artifacts = configurations.getByName("releaseRuntimeClasspath").resolvedConfiguration.resolvedArtifacts
-        val forbidden = artifacts.filter { artifact -> forbiddenGroups.any { artifact.moduleVersion.id.group.startsWith(it) } }
-        check(forbidden.isEmpty()) { "Forbidden runtime dependencies: ${forbidden.joinToString { it.moduleVersion.id.toString() }}" }
-        println("Verified ${artifacts.size} runtime artifacts: no GMS, Firebase, Play or Billing dependencies.")
+        val configNames = listOf("debugRuntimeClasspath", "releaseRuntimeClasspath")
+        var totalVerified = 0
+        for (configName in configNames) {
+            val artifacts = configurations.getByName(configName).resolvedConfiguration.resolvedArtifacts
+            val forbidden = artifacts.filter { artifact -> forbiddenGroups.any { artifact.moduleVersion.id.group.startsWith(it) } }
+            check(forbidden.isEmpty()) { "Forbidden runtime dependencies in $configName: ${forbidden.joinToString { it.moduleVersion.id.toString() }}" }
+            println("Verified ${artifacts.size} runtime artifacts in $configName: no GMS, Firebase, Play or Billing dependencies.")
+            totalVerified += artifacts.size
+        }
+        println("Verified $totalVerified runtime artifacts across ${configNames.size} configurations: no GMS, Firebase, Play or Billing dependencies.")
     }
 }
