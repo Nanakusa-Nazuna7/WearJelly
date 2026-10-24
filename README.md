@@ -109,7 +109,7 @@
 
 | 层 | 方案 |
 | --- | --- |
-| 语言 / UI | Kotlin + Jetpack Compose for Wear OS 1.4（Material for Wear） |
+| 语言 / UI | Kotlin + Jetpack Compose for Wear OS + Wear Compose Material 3 1.7.0 |
 | 架构 | MVVM + StateFlow 单向数据流；自定义返回栈（`AppScreen` sealed interface），不引入导航库 |
 | 依赖注入 | Koin |
 | 播放 | Media3 1.4.1：ExoPlayer + MediaSessionService + MediaController（SessionToken），通过自定义 SessionCommand 操作队列 |
@@ -142,8 +142,8 @@ adb install -r app-release.apk     # 覆盖升级
 
 ```bash
 ./gradlew :app:assembleRelease       # 编译签名 release APK
-./gradlew :app:verifyNoGms           # 校验无 Google 服务依赖
-./gradlew :app:testReleaseUnitTest   # 运行 JVM 单元测试
+./gradlew verifyNoGms                 # 校验无 Google 服务依赖
+./gradlew :app:testDebugUnitTest      # 运行 JVM 单元测试
 ```
 
 release 签名读取项目根目录的 `keystore.properties`（格式见 `keystore.properties.example`，真实文件已被 gitignore）；未配置时使用调试签名。
@@ -174,7 +174,7 @@ flowchart LR
 
 ## 已知限制
 
-- 在 TicWatch Pro X 的 rover ROM 上，`ScalingLazyColumn` 的自定义缩放参数无法生效（所有行都会缩到最小值），因此列表采用库默认的全尺寸布局；「中间两行放大、边缘缩小」的观感需要自定义布局实现，尚未构建
+- 在 TicWatch Pro X 的 rover ROM 上，Wear Compose Material 3 的列表变换效果受设备渲染限制，因此列表使用 `TransformingLazyColumn` 的默认变换规范；中间行放大、边缘行缩小的效果由 `SurfaceTransformation` 提供
 - 服务端不返回 Content-Length 时，转码缓存进度为估算值
 
 ---
