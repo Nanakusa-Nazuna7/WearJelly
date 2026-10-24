@@ -1,4 +1,6 @@
-# WearJelly
+# WearJelly Legacy
+
+> 这是 WearJelly 的 legacy 分支，保留 Material 3 迁移前的旧版 Wear Compose Material 实现。新安装和持续开发请使用 `main` 分支的 Wear Compose Material 3 版本。
 
 面向 Wear OS 的独立 Jellyfin 音乐播放器，专为 **TicWatch Pro X（中国版，无 GMS）** 等不带 Google 服务的国行手表优化。纯手表端应用，无需手机配合，不包含任何 Google Play 服务、Firebase、Play Billing 或 Wearable Play API 依赖。
 
